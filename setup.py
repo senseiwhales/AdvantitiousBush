@@ -1,7 +1,15 @@
+import os
 from setuptools import setup, find_packages
 
+# Get the directory where setup.py is located
+base_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Read the contents of README.md
+with open(os.path.join(base_dir, 'README.md'), encoding='utf-8') as f:
+    long_description = f.read()
+
 setup(
-    name='advantitious-bush',
+    name='AdvantitiousBush',
     version='1.0.0',
     packages=find_packages(),
     install_requires=[
@@ -12,7 +20,7 @@ setup(
     author='senseiwhales',
     author_email='senseiwhales@gmail.com',
     description='A Python library for implementing the Advantitious Bush algorithm',
-    long_description=open('README.md').read(),
+    long_description=long_description,
     long_description_content_type='text/markdown',
     url='https://github.com/senseiwhales/advantitious-bush',
     license='Apache License 2.0',
