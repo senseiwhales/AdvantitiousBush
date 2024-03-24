@@ -7,4 +7,4 @@ Advantitious Bush is a Python library for implementing a machine learning algori
 You can install Advantitious Bush via pip:
 
 ```bash
-pip install advantitious-bush
+pip install AdvantitiousBush
