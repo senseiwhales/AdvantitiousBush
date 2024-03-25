@@ -1,5 +1,5 @@
-.. Your Project Name Documentation
-.. Your Name
+.. AdvantitiousBush
+.. senseiwhales
 .. March 2024
 
 Welcome to Your Project Name's documentation!
