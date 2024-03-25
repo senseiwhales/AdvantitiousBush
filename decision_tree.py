@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import os
 import logging
-import pickle  # Import the pickle module
+import pickle
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -151,6 +151,6 @@ def load_stock_data(file_path):
         return None
     
 if __name__ == "__main__":
-    strategy = MLTrader(symbol='MAT')
+    strategy = MLTrader(symbol='MAT2')
     strategy.on_trading_iteration()
     print("Total profit (percentage):", strategy.total_profit_percentage)
