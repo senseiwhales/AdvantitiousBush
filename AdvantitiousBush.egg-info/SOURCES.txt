@@ -1,8 +1,0 @@
-LICENSE
-README.md
-setup.py
-AdvantitiousBush.egg-info/PKG-INFO
-AdvantitiousBush.egg-info/SOURCES.txt
-AdvantitiousBush.egg-info/dependency_links.txt
-AdvantitiousBush.egg-info/requires.txt
-AdvantitiousBush.egg-info/top_level.txt
