@@ -1,7 +1,7 @@
 # advantitious_bush/__main__.py
 
-from .advantitious_bush import AdvantitiousBush
-from .advantitious_bush import load_stock_data
+from decision_tree import AdvantitiousBush
+from decision_tree import load_stock_data
 
 def main():
     # Example usage
