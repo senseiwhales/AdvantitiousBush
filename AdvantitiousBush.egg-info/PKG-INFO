@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: AdvantitiousBush
-Version: 1.0.1
+Version: 1.0.2
 Summary: A Python library for implementing the Advantitious Bush algorithm
 Home-page: https://github.com/senseiwhales/advantitious-bush
 Author: senseiwhales
@@ -17,6 +17,10 @@ Requires-Dist: pandas
 # Advantitious Bush
 
 Advantitious Bush is a Python library for implementing a machine learning algorithm based on the Advantitious Bush method.
+
+## Contact Me!
+
+Email me at senseiwhales@gmail.com
 
 ## Installation
 
