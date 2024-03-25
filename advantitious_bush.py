@@ -3,7 +3,8 @@
 import logging
 import numpy as np
 import pandas as pd
-from .decision_tree import DecisionTree
+from decision_tree import DecisionTree
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -37,16 +38,14 @@ class AdvantitiousBush:
 
         return np.mean(predictions, axis=1)
 
-def load_stock_data(file_path):
+def load_stock_data():
     """
-    Load historical stock price data from a CSV file.
-
-    Parameters:
-        file_path (str): Path to the CSV file.
+    Load historical stock price data from a CSV file named 'MAT.csv'.
 
     Returns:
         pd.DataFrame: A pandas DataFrame containing the historical stock price data.
     """
+    file_path = os.path.join(os.path.dirname(__file__), 'MAT.csv')
     try:
         # Load data from CSV file
         data = pd.read_csv(file_path)
@@ -58,7 +57,7 @@ def load_stock_data(file_path):
 if __name__ == "__main__":
     # Example usage
     strategy = AdvantitiousBush()
-    data = load_stock_data('MAT.csv')  # Load data from MAT.csv file
+    data = load_stock_data()  # Load data from MAT.csv file
     if data is not None:
         X = data[['Open', 'High', 'Low', 'Close', 'Volume']].values
         y = data['Close'].values
@@ -67,4 +66,3 @@ if __name__ == "__main__":
         print("Predictions:", predictions)
     else:
         logger.error("Failed to load data. Exiting.")
-        print("Sadly it done be broke")
