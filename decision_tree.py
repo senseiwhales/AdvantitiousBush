@@ -5,7 +5,9 @@ import logging
 import pickle
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    handlers=[logging.FileHandler('trades.log'), logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
 class DecisionTree:
@@ -104,10 +106,11 @@ class DecisionTree:
 
 
 class MLTrader:
-    def __init__(self, symbol: str = "MAT"):
+    def __init__(self, symbol: str = "MAT", starting_cash: float = 10000):
         self.symbol = symbol
-        self.total_profit_percentage = 0
-        self.model = DecisionTree(max_depth=10, max_features=3)  # Initialize DecisionTree model
+        self.total_cash = starting_cash
+        self.model = DecisionTree(max_depth=10, max_features=3)
+        self.trades = []
 
     def on_trading_iteration(self):
         current_dir = os.path.dirname(__file__)
@@ -117,30 +120,46 @@ class MLTrader:
         X = data[['Open', 'High', 'Low', 'Close', 'Volume']].values
         y = data['Close'].values
         self.model.fit(X, y)
+        print("Finished Training")
         predictions = self.model.predict(X)
         current_prices = data['Close'].values
         next_day_prices = np.roll(current_prices, -1)
         next_day_prices[-1] = current_prices[-1]
-        profit_percentage = self.calculate_profit_percentage(predictions, current_prices, next_day_prices)
-        self.total_profit_percentage += profit_percentage
-        logger.info(f"Trade Profit: {profit_percentage:.2f}%, Total Profit: {self.total_profit_percentage:.2f}%")
+        profit, trades = self.calculate_profit(predictions, current_prices, next_day_prices)
+        self.total_cash += profit
+        self.trades.extend(trades)
+        logger.info(f"Trade Profit: ${profit:.2f}, Total Cash: ${self.total_cash:.2f}")
+        for trade in trades:
+            logger.info(f"Trade: {trade}")
 
-    def calculate_profit_percentage(self, predictions, current_prices, next_day_prices):
-        cash = 0  # Initially no position
+    def calculate_profit(self, predictions, current_prices, next_day_prices):
+        cash = self.total_cash
         stocks = 0
-        initial_cash = current_prices[0]  # Initial investment
+        initial_cash = self.total_cash
+        trades = []
+
         for i in range(len(predictions)):
             if predictions[i] > current_prices[i]:  # Predicted price is higher, buy
                 if cash > 0:  # Ensure enough cash to buy
-                    stocks += cash / current_prices[i]  # Buy as many stocks as possible
-                    cash = 0  # Update cash
+                    stocks_to_buy = cash / current_prices[i]  # Calculate number of stocks to buy
+                    stocks += stocks_to_buy  # Buy stocks
+                    cash -= stocks_to_buy * current_prices[i]  # Update cash
+                    trade_info = {'action': 'BUY', 'price': current_prices[i], 'stocks': stocks_to_buy}
+                    trades.append(trade_info)
+                    logger.info(f"Trade: {trade_info}")  # Log the trade
             elif predictions[i] < current_prices[i]:  # Predicted price is lower, sell
                 if stocks > 0:  # Ensure holding some stocks to sell
                     cash += stocks * current_prices[i]  # Sell all stocks
+                    trade_info = {'action': 'SELL', 'price': current_prices[i], 'stocks': stocks}
+                    trades.append(trade_info)
+                    logger.info(f"Trade: {trade_info}")  # Log the trade
                     stocks = 0  # Update stocks
+
         final_value = cash + stocks * next_day_prices[-1]  # Calculate final portfolio value
-        profit_percentage = ((final_value - initial_cash) / initial_cash) * 100  # Calculate profit percentage
-        return profit_percentage
+        profit = final_value - initial_cash  # Calculate profit
+        return profit, trades
+
+
 
 def load_stock_data(file_path):
     try:
@@ -151,6 +170,7 @@ def load_stock_data(file_path):
         return None
     
 if __name__ == "__main__":
-    strategy = MLTrader(symbol='MAT2')
+    starting_cash = 10000  # Set your desired starting cash here
+    strategy = MLTrader(symbol='MAT2', starting_cash=starting_cash)
     strategy.on_trading_iteration()
-    print("Total profit (percentage):", strategy.total_profit_percentage)
+    print("Total cash:", strategy.total_cash)
