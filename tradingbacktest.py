@@ -2,7 +2,8 @@ import numpy as np
 import pandas as pd
 import os
 import logging
-from decision_tree import DecisionTree  # Import the DecisionTree model class
+import pickle  # Import the pickle module
+from advantitious_bush import MLTrader  # Import the MLTrader class
 
 # Debug: Print current working directory
 print("Current working directory:", os.getcwd())
@@ -22,7 +23,14 @@ class MLTrader:
     def __init__(self, symbol: str = "MAT"):
         self.symbol = symbol
         self.total_profit_percentage = 0
-        self.model = DecisionTree(max_depth=10, max_features=3)  # Initialize DecisionTree model
+        self.model = self.load_model()  # Load model from file or initialize a new one
+
+    def load_model(self, filename='decision_tree_model.pkl'):
+        if os.path.exists(filename):
+            with open(filename, 'rb') as f:
+                return pickle.load(f)
+        else:
+            return MLTrader()  # Initialize a new MLTrader object if model file doesn't exist
 
     def on_trading_iteration(self):
         data = load_stock_data(f'{self.symbol}.csv')
