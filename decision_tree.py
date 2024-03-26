@@ -114,15 +114,26 @@ class MLTrader:
 
     def on_trading_iteration(self):
         current_dir = os.path.dirname(__file__)
-        data = load_stock_data(os.path.join(current_dir, f'{self.symbol}.csv'))
+        data = self.load_stock_data(os.path.join(current_dir, f'{self.symbol}.csv'))
         if data is None:
+            logger.error("Failed to load stock data.")
             return
-        X = data[['Open', 'High', 'Low', 'Close', 'Volume']].values
-        y = data['Close'].values
+        logger.info("Stock data loaded successfully.")
+        
+        # Resample to 30-minute intervals
+        data = self.resample_data(data, interval='30min')
+        if data is None:
+            logger.error("Failed to resample stock data.")
+            return
+        logger.info("Stock data resampled successfully.")
+        
+        X = data[['o', 'h', 'l', 'c', 'v']].values
+        y = data['c'].values
+
         self.model.fit(X, y)
         print("Finished Training")
         predictions = self.model.predict(X)
-        current_prices = data['Close'].values
+        current_prices = data['c'].values
         next_day_prices = np.roll(current_prices, -1)
         next_day_prices[-1] = current_prices[-1]
         profit, trades = self.calculate_profit(predictions, current_prices, next_day_prices)
@@ -155,20 +166,36 @@ class MLTrader:
                     logger.info(f"Trade: {trade_info}")  # Log the trade
                     stocks = 0  # Update stocks
 
-        final_value = cash + stocks * next_day_prices[-1]  # Calculate final portfolio value
+                final_value = cash + stocks * next_day_prices[-1]  # Calculate final portfolio value
         profit = final_value - initial_cash  # Calculate profit
         return profit, trades
 
+    def load_stock_data(self, file_path):
+        try:
+            # Read the CSV file
+            data = pd.read_csv(file_path)
+
+            # Check if the required columns are present
+            required_columns = ['v', 'vw', 'o', 'c', 'h', 'l', 't', 'n']
+            if not set(required_columns).issubset(data.columns):
+                missing_columns = set(required_columns) - set(data.columns)
+                logger.error(f"Missing required columns: {missing_columns}")
+                return None
+
+            # Rename columns if necessary
+            column_mapping = {'v': 'volume', 'vw': 'volume_weighted', 'o': 'open', 
+                            'c': 'close', 'h': 'high', 'l': 'low', 't': 'timestamp', 'n': 'count'}
+            data.rename(columns=column_mapping, inplace=True)
+
+            # Set timestamp as index
+            data.set_index('timestamp', inplace=True)
+
+            return data
+        except Exception as e:
+            logger.error(f"Error loading data from file {file_path}: {e}")
+            return None
 
 
-def load_stock_data(file_path):
-    try:
-        data = pd.read_csv(file_path)
-        return data
-    except Exception as e:
-        logger.error(f"Error loading data from file {file_path}: {e}")
-        return None
-    
 if __name__ == "__main__":
     starting_cash = 10000  # Set your desired starting cash here
     strategy = MLTrader(symbol='MAT2', starting_cash=starting_cash)
