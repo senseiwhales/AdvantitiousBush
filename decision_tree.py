@@ -120,13 +120,6 @@ class MLTrader:
             return
         logger.info("Stock data loaded successfully.")
         
-        # Resample to 30-minute intervals
-        data = self.resample_data(data, interval='30min')
-        if data is None:
-            logger.error("Failed to resample stock data.")
-            return
-        logger.info("Stock data resampled successfully.")
-        
         X = data[['o', 'h', 'l', 'c', 'v']].values
         y = data['c'].values
 
@@ -166,29 +159,22 @@ class MLTrader:
                     logger.info(f"Trade: {trade_info}")  # Log the trade
                     stocks = 0  # Update stocks
 
-                final_value = cash + stocks * next_day_prices[-1]  # Calculate final portfolio value
+        final_value = cash + stocks * next_day_prices[-1]  # Calculate final portfolio value
         profit = final_value - initial_cash  # Calculate profit
         return profit, trades
 
     def load_stock_data(self, file_path):
         try:
             # Read the CSV file
-            data = pd.read_csv(file_path)
+            data = pd.read_csv(file_path, index_col='t')
+            print("Data read successfully:", data.head())  # Debug print
 
             # Check if the required columns are present
-            required_columns = ['v', 'vw', 'o', 'c', 'h', 'l', 't', 'n']
+            required_columns = ['o', 'h', 'l', 'c', 'v']  # Modify the required columns accordingly
             if not set(required_columns).issubset(data.columns):
                 missing_columns = set(required_columns) - set(data.columns)
                 logger.error(f"Missing required columns: {missing_columns}")
                 return None
-
-            # Rename columns if necessary
-            column_mapping = {'v': 'volume', 'vw': 'volume_weighted', 'o': 'open', 
-                            'c': 'close', 'h': 'high', 'l': 'low', 't': 'timestamp', 'n': 'count'}
-            data.rename(columns=column_mapping, inplace=True)
-
-            # Set timestamp as index
-            data.set_index('timestamp', inplace=True)
 
             return data
         except Exception as e:
