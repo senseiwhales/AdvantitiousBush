@@ -4,6 +4,9 @@ import os
 import logging
 import alpaca_trade_api as tradeapi
 import datetime
+from alpaca.data.historical import CryptoHistoricalDataClient
+from alpaca.data.requests import CryptoBarsRequest
+from alpaca.data.timeframe import TimeFrame
 
 API_KEY = 'PKYM7P7LWL9V2WLADG7P'
 API_SECRET = '7MZVax8cgg1wTzoUUKfocOPTyNgJrtOcmNYqIvka'
@@ -107,19 +110,19 @@ def format_datetime(dt):
     return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 class MLTrader:
-    def __init__(self, symbol: str = "MAT", starting_cash: float = 10000):
+    def __init__(self, symbol: str = "BTCUSD", starting_cash: float = 10000):
         self.symbol = symbol
         self.total_cash = starting_cash
-        self.alpaca = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets')  # Initialize Alpaca
         self.model = DecisionTree(max_depth=10, max_features=3)
         self.trades = []
+        self.alpaca = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets', api_version='v2')
 
     def on_trading_iteration(self):
-        data = self.load_stock_data(self.symbol)
+        data = self.load_crypto_data(["BTC/USD"], TimeFrame.Day)
         if data is None or len(data) == 0:  # Check if data is empty
-            logger.error("Failed to load stock data or data is empty.")
+            logger.error("Failed to load crypto data or data is empty.")
             return
-        logger.info("Stock data loaded successfully.")
+        logger.info("Crypto data loaded successfully.")
         
         X = data.values  # Use closing prices as features
         y = np.roll(X, -1)  # Predict the next closing price
@@ -131,76 +134,102 @@ class MLTrader:
             current_price = X[-1][0]  # Current closing price
 
             logger.info(f"Current price of {self.symbol}: {current_price}")  # Print current price
+            logger.info(f"Current prediction for {self.symbol}: {prediction}")  # Print current prediction
 
             # Calculate the number of shares to buy or sell based on the current price and available cash
-            shares_to_trade = int(self.total_cash / current_price)
-
+            shares_to_trade = (self.total_cash / current_price)
             # Make trading decision based on prediction
             if prediction > current_price:
                 # Buy logic
-                self.buy(shares_to_trade, current_price)
+                self.buy(shares_to_trade, current_price, prediction)
             elif prediction < current_price:
                 # Sell logic
-                self.sell(shares_to_trade, current_price)
+                self.sell(current_price, prediction)
             else:
                 logger.info("Holding position.")
+        self.sell(current_price, prediction)
 
 
-
-    def buy(self, shares_to_trade, current_price):
-        if shares_to_trade > 0:
-            try:
-                self.alpaca.submit_order(
-                    symbol='MAT',
-                    qty=shares_to_trade,
-                    side='buy',
-                    type='market',
-                    time_in_force='gtc'
-                )
-                logger.info(f"Bought {shares_to_trade} shares of {self.symbol}.")
-                self.total_cash -= shares_to_trade * current_price  # Update total cash after buying
-            except Exception as e:
-                logger.error(f"Failed to buy {shares_to_trade} shares of {self.symbol}: {e}")
-
-    def sell(self, shares_to_trade, current_price):
-        if shares_to_trade > 0:
-            try:
-                self.alpaca.submit_order(
-                    symbol='MAT',
-                    qty=shares_to_trade,
-                    side='sell',
-                    type='market',
-                    time_in_force='gtc'
-                )
-                logger.info(f"Sold {shares_to_trade} shares of {self.symbol}.")
-                self.total_cash += shares_to_trade * current_price  # Update total cash after selling
-            except Exception as e:
-                logger.error(f"Failed to sell {shares_to_trade} shares of {self.symbol}: {e}")
-
-    def load_stock_data(self, symbol):
+    def buy(self, shares_to_trade, current_price, prediction):
         try:
-            # Fetch current 30-minute candle data from Alpaca
-            current_time = datetime.datetime.now()
-            start_time = current_time - datetime.timedelta(minutes=30)
-            end_time = current_time
-            barset = self.alpaca.get_bars(symbol, '30Min', start=format_datetime(start_time), end=format_datetime(end_time))
-
-            # Extract the closing prices from the fetched data
-            closing_prices = [bar.c for bar in barset]
-
-            # Create a DataFrame from the closing prices
-            data = pd.DataFrame(closing_prices, columns=['c'])
-
-            return data
+            account_info = self.alpaca.get_account()
+            available_cash = float(account_info.buying_power)
+            cost_of_purchase = shares_to_trade * current_price
+            if cost_of_purchase > 0 and cost_of_purchase <= available_cash:  # Ensure sufficient cash balance for buying
+                if prediction > current_price:  # Check if the prediction is higher than the current price to trigger a buy
+                    order = self.alpaca.submit_order(
+                        symbol=self.symbol,
+                        qty=shares_to_trade,
+                        side='buy',
+                        type='market',
+                        time_in_force='gtc'
+                    )
+                    logger.info(f"Bought {shares_to_trade} shares of {self.symbol} at ${current_price}.")
+                    self.total_cash -= order.filled_qty * order.filled_avg_price  # Update total cash after buying
+                else:
+                    logger.info("Prediction is lower than current price. Not buying.")
+            else:
+                logger.info("Insufficient cash balance to buy.")
         except Exception as e:
-            logger.error(f"Error loading data for symbol {symbol} from Alpaca: {e}")
+            logger.error(f"Failed to buy {shares_to_trade} shares of {self.symbol}: {e}")
+
+
+
+
+
+    def sell(self, current_price, prediction):
+        try:
+            positions = self.alpaca.list_positions()
+            symbol_position = next((pos for pos in positions if pos.symbol == self.symbol), None)
+            if symbol_position:
+                qty_to_sell = float(symbol_position.qty)
+                if qty_to_sell > 0:
+                    order = self.alpaca.submit_order(
+                        symbol=self.symbol,
+                        qty=qty_to_sell,
+                        side='sell',
+                        type='market',
+                        time_in_force='gtc'
+                    )
+                    logger.info(f"Sold {qty_to_sell} shares of {self.symbol} at ${current_price}.")
+                    self.total_cash += order.filled_qty * order.filled_avg_price
+                else:
+                    logger.info("No shares to sell.")
+            else:
+                logger.info("No position found for the symbol.")
+        except Exception as e:
+            logger.error(f"Failed to sell {self.symbol}: {e}")
+
+
+
+
+
+
+
+
+    def load_crypto_data(self, symbols, timeframe):
+        try:
+            client = CryptoHistoricalDataClient()
+            request_params = CryptoBarsRequest(
+                                symbol_or_symbols=symbols,
+                                timeframe=timeframe,
+                                start=datetime.datetime.now() - datetime.timedelta(days=30),
+                                end=datetime.datetime.now()
+                            )
+            bars = client.get_crypto_bars(request_params)
+            if bars:
+                return bars.df
+            else:
+                return None
+        except Exception as e:
+            logger.error(f"Error loading crypto data for symbols {symbols}: {e}")
             return None
 
-
-
+        
 if __name__ == "__main__":
+    
     starting_cash = 10000  # Set your desired starting cash here
-    strategy = MLTrader(symbol='MAT', starting_cash=starting_cash)
+    strategy = MLTrader(symbol='BTCUSD', starting_cash=starting_cash)
     
     # Run trading iteration indefinitely
     while True:
