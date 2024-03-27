@@ -1,26 +1,19 @@
-import alpaca_trade_api as tradeapi
-import datetime
+from alpaca.data.historical import CryptoHistoricalDataClient
+from alpaca.data.requests import CryptoBarsRequest
+from alpaca.data.timeframe import TimeFrame
+from datetime import datetime
 
-# Alpaca API authentication
-API_KEY = 'PKYM7P7LWL9V2WLADG7P'
-API_SECRET = '7MZVax8cgg1wTzoUUKfocOPTyNgJrtOcmNYqIvka'
-BASE_URL = 'https://paper-api.alpaca.markets'  # Use 'https://api.alpaca.markets' for live trading
+# no keys required for crypto data
+client = CryptoHistoricalDataClient()
 
-# Initialize Alpaca API
-api = tradeapi.REST(API_KEY, API_SECRET, base_url=BASE_URL, api_version='v2')
+request_params = CryptoBarsRequest(
+                        symbol_or_symbols=["BTC/USD"],
+                        timeframe=TimeFrame.Day,
+                        start=datetime(2022, 7, 1),
+                        end=datetime(2022, 9, 1)
+                 )
 
-# Request OHLCV data for Bitcoin (BTCUSD)
-symbol = 'BTCUSD'
-timeframe = '1Min'  # 1 minute timeframe
-start_time = (datetime.datetime.now() - datetime.timedelta(minutes=30)).strftime('%Y-%m-%dT%H:%M:%SZ')  # 30 minutes ago
-end_time = datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%SZ')
+bars = client.get_crypto_bars(request_params)
 
-try:
-    barset = api.get_bars(symbol, timeframe, start=start_time, end=end_time)
-
-    for bar in barset[symbol]:
-        print(f"Timestamp: {bar.t}, Open: {bar.o}, High: {bar.h}, Low: {bar.l}, Close: {bar.c}, Volume: {bar.v}")  
-    
-    print("Successfully fetched OHLCV data for", symbol)
-except Exception as e:
-    print(f"Failed to fetch OHLCV data for {symbol}: {e}")
+# Convert to dataframe and print
+print(bars.df)
