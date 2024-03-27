@@ -183,11 +183,11 @@ class MLTrader:
 
 
 if __name__ == "__main__":
-    starting_cash = 10000  # Set your desired starting cash here
-    strategy = MLTrader(symbol='MAT2', starting_cash=starting_cash)
+    starting_cash = 10  # Set your desired starting cash here
+    strategy = MLTrader(symbol='MAT', starting_cash=starting_cash)
     
     # Define the number of trading iterations (days) you want to simulate
-    num_trading_days = 200  # Change this to the desired number of trading days
+    num_trading_days = 300  # Change this to the desired number of trading days
     
     for day in range(1, num_trading_days + 1):
         strategy.on_trading_iteration()
