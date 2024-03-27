@@ -106,7 +106,7 @@ class DecisionTree:
 
 
 class MLTrader:
-    def __init__(self, symbol: str = "MAT", starting_cash: float = 10000):
+    def __init__(self, symbol: str = "BTCUSD2", starting_cash: float = 10000):
         self.symbol = symbol
         self.total_cash = starting_cash
         self.model = DecisionTree(max_depth=10, max_features=3)
@@ -136,32 +136,32 @@ class MLTrader:
         for trade in trades:
             logger.info(f"Trade: {trade}")
 
-    def calculate_profit(self, predictions, current_prices, next_day_prices):
-        cash = self.total_cash
-        stocks = 0
-        initial_cash = self.total_cash
-        trades = []
+        def calculate_profit(self, predictions, current_prices, next_day_prices):
+            cash = self.total_cash
+            stocks = 0
+            initial_cash = self.total_cash
+            trades = []
 
-        for i in range(len(predictions)):
-            if predictions[i] > current_prices[i]:  # Predicted price is higher, buy
-                if cash > 0:  # Ensure enough cash to buy
-                    stocks_to_buy = cash / current_prices[i]  # Calculate number of stocks to buy
-                    stocks += stocks_to_buy  # Buy stocks
-                    cash -= stocks_to_buy * current_prices[i]  # Update cash
-                    trade_info = {'action': 'BUY', 'price': current_prices[i], 'stocks': stocks_to_buy}
-                    trades.append(trade_info)
-                    logger.info(f"Trade: {trade_info}")  # Log the trade
-            elif predictions[i] < current_prices[i]:  # Predicted price is lower, sell
-                if stocks > 0:  # Ensure holding some stocks to sell
-                    cash += stocks * current_prices[i]  # Sell all stocks
-                    trade_info = {'action': 'SELL', 'price': current_prices[i], 'stocks': stocks}
-                    trades.append(trade_info)
-                    logger.info(f"Trade: {trade_info}")  # Log the trade
-                    stocks = 0  # Update stocks
+            for i in range(len(predictions)):
+                if predictions[i] > current_prices[i]:  # Predicted price is higher, buy
+                    if cash > 0:  # Ensure enough cash to buy
+                        stocks_to_buy = cash / current_prices[i]  # Calculate number of stocks to buy
+                        stocks += stocks_to_buy  # Buy stocks
+                        cash -= stocks_to_buy * current_prices[i]  # Update cash
+                        trade_info = {'action': 'BUY', 'price': current_prices[i], 'stocks': stocks_to_buy}
+                        trades.append(trade_info)
+                        logger.info(f"Trade: {trade_info}")  # Log the trade
+                elif predictions[i] < current_prices[i]:  # Predicted price is lower, sell
+                    if stocks > 0:  # Ensure holding some stocks to sell
+                        cash += stocks * current_prices[i]  # Sell all stocks
+                        trade_info = {'action': 'SELL', 'price': current_prices[i], 'stocks': stocks}
+                        trades.append(trade_info)
+                        logger.info(f"Trade: {trade_info}")  # Log the trade
+                        stocks = 0  # Update stocks
 
-        final_value = cash + stocks * next_day_prices[-1]  # Calculate final portfolio value
-        profit = final_value - initial_cash  # Calculate profit
-        return profit, trades
+            final_value = cash + stocks * next_day_prices[-1]  # Calculate final portfolio value
+            profit = final_value - initial_cash  # Calculate profit
+            return profit, trades
 
     def load_stock_data(self, file_path):
         try:
@@ -184,13 +184,15 @@ class MLTrader:
 
 if __name__ == "__main__":
     starting_cash = 10  # Set your desired starting cash here
-    strategy = MLTrader(symbol='MAT', starting_cash=starting_cash)
+    strategy = MLTrader(symbol='BTCUSD', starting_cash=starting_cash)
     
     # Define the number of trading iterations (days) you want to simulate
-    num_trading_days = 300  # Change this to the desired number of trading days
+    num_trading_days = 30  # Change this to the desired number of trading days
     
     for day in range(1, num_trading_days + 1):
         strategy.on_trading_iteration()
         print(f"Profit after Day {day}: ${strategy.total_cash - starting_cash:.2f}")
     
     print("Total cash:", strategy.total_cash)
+
+                   
