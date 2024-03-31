@@ -106,7 +106,7 @@ class DecisionTree:
 
 
 class MLTrader:
-    def __init__(self, symbol: str = "BTCUSD2", starting_cash: float = 10000):
+    def __init__(self, symbol: str = "MAT2", starting_cash: float = 10000):
         self.symbol = symbol
         self.total_cash = starting_cash
         self.model = DecisionTree(max_depth=10, max_features=3)
