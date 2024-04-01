@@ -141,8 +141,22 @@ class DecisionTree:
         else:
             return self._traverse_tree(x, node['right'])
 
+import requests
+import logging
+import time
+import threading
+
+API_KEY = 'PKYM7P7LWL9V2WLADG7P'
+API_SECRET = '7MZVax8cgg1wTzoUUKfocOPTyNgJrtOcmNYqIvka'
+
+# Configure logging
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    handlers=[logging.FileHandler('trades.log'), logging.StreamHandler()])
+logger = logging.getLogger(__name__)
+
 class MLTrader:
-    def __init__(self, symbol: str = "BTC/USD", starting_cash: float = 10000):
+    def __init__(self, symbol: str = "ETH/USD", starting_cash: float = 10000):
         self.symbol = symbol
         self.total_cash = starting_cash
         self.model = DecisionTree(max_depth=10, max_features=3)
@@ -150,20 +164,6 @@ class MLTrader:
         self.alpaca = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets', api_version='v2')
         self.previous_prediction = None  
         self.current_price = None
-    
-    def print_info_periodically(self):
-        while True:
-            try:
-                if self.model.current_price is not None:
-                    logger.info(f"Current prediction for {self.symbol}: {self.previous_prediction}")
-                    logger.info(f"Current price for {self.symbol}: {self.model.current_price}")
-                else:
-                    logger.info("Current price is not available.")
-            except Exception as e:
-                logger.error(f"Error in printing information: {e}")
-
-            time.sleep(5)  # Sleep for 5 seconds
-
 
     def buy_shares(self, symbol):
         try:
@@ -184,124 +184,147 @@ class MLTrader:
         except tradeapi.rest.APIError as e:
             logger.error(f"Failed to buy shares of {symbol}: {str(e)}")
 
-    def on_trading_iteration(self):
-        try:
-            # Load data from CSV file
-            dir_path = os.path.dirname(os.path.realpath(__file__))
-            file_path = os.path.join(dir_path, 'crypto.csv')
-            data = pd.read_csv(file_path)
+    def get_bitquery_current_candle(self):
+        base_url = 'https://graphql.bitquery.io/'
+        api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
 
-            if data is None or len(data) == 0:
-                logger.error("Failed to load crypto data or data is empty.")
-                return
+        query = """
+        query {
+        ethereum(network: bsc) {
+            dexTrades(
+            baseCurrency: {is: "0x2170ed0880ac9a755fd29b2688956bd959f933f8"}
+            quoteCurrency: {is: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"}
+            exchangeName: {is: "Pancake"}
+            options: {desc: ["timeInterval.minute"]}
+            time: {since: "2024-03-31T12:00:00", till: "2024-04-01T12:00:00"}
+            ) {
+            timeInterval {
+                minute(count: 30)
+            }
+            count
+            quotePrice
+            high: quotePrice(calculate: maximum)
+            low: quotePrice(calculate: minimum)
+            open: minimum(of: block, get: quote_price)
+            close: maximum(of: block, get: quote_price)
+            volume: quoteAmount
+            }
+        }
+        }
+        """
 
-            # Extract features and target variable
-            X = data.drop(columns=['date']).values  # Remove date column and use the remaining columns as features
-            y = data['close'].shift(-1).values  # Shift the 'close' column by 1 to get the target variable
-
-            # Remove NaN values
-            X = X[:-1]  # Remove the last row of X to match the shifted y
-            y = y[:-1]  # Remove the last element of y
-
-            # Train the decision tree model
-            self.model.fit(X, y)
-
-            # Make predictions
-            prediction = self.model.predict(X[-1].reshape(1, -1))[0]  # Predict next closing price
-            current_price = X[-1][0]  # Current closing price
-            print(prediction)
-            
-            # Update previous prediction
-            self.previous_prediction = prediction
-
-            # Print prediction and current price
-            logger.info(f"Current prediction for {self.symbol}: {prediction}")
-            logger.info(f"Current price for {self.symbol}: {current_price}")
-
-            # Calculate the number of shares to buy or sell based on the current price and available cash
-            shares_to_trade = self.total_cash / current_price
-
-            # Make trading decision based on prediction
-            if prediction > current_price:
-                # Buy logic
-                self.buy_shares(self.symbol)
-            elif prediction < current_price:
-                # Sell logic
-                self.sell(current_price, prediction)
-            else:
-                logger.info("Holding position.")
-
-            # Update current price
-            self.update_price('BTC/USD')
-        except Exception as e:
-            logger.error(f"Error in trading iteration: {e}")
-
-    
-
-    def get_crypto_data(self, symbol, api_key):
-        base_url = "https://www.alphavantage.co/query"
-        function = "CRYPTO_INTRADAY"  # Function to fetch intraday crypto data
-        interval = "30min"  # Interval for data (adjust as needed)
-        
-        params = {
-            "function": function,
-            "symbol": symbol,
-            "interval": interval,
-            "apikey": api_key
+        headers = {
+            'Content-Type': 'application/json',
+            'X-API-KEY': api_key
         }
 
         try:
-            response = requests.get(base_url, params=params)
-            data = response.json()
-            logger.info(f"Response from Alpha Vantage: {data}")  # Log the response
-
-            # Check if data contains the expected key for crypto data
-            if "Time Series Crypto (30min)" in data:
-                crypto_data = data["Time Series Crypto (30min)"]
-                # Extract the latest data point
-                latest_data = next(iter(crypto_data.values()))
-                # Extract relevant information (e.g., price)
-                price = float(latest_data.get("4. close"))  # Adjust key based on actual data structure
-                # Additional data processing as needed
-
-                # Construct the crypto data dictionary
-                crypto_data = {
-                    "price": price
-                    # Add other relevant data here
-                }
-
-                logger.info(f"Fetched crypto data for {symbol}: {crypto_data}")
-                return crypto_data
+            response = requests.post(base_url, json={'query': query}, headers=headers)
+            if response.status_code == 200:
+                data = response.json()
+                if 'data' in data and 'ethereum' in data['data'] and 'dexTrades' in data['data']['ethereum']:
+                    dex_trades = data['data']['ethereum']['dexTrades']
+                    formatted_trades = []
+                    for trade in dex_trades:
+                        formatted_trade = {
+                            'timeInterval': {'minute': trade['timeInterval']['minute']},
+                            'count': trade['count'],
+                            'quotePrice': trade['quotePrice'],
+                            'high': trade['high'],
+                            'low': trade['low'],
+                            'open': trade['open'],
+                            'close': trade['close'],
+                            'volume': trade['volume']
+                        }
+                        formatted_trades.append(formatted_trade)
+                    return {'ethereum': {'dexTrades': formatted_trades}}
+                else:
+                    return "Invalid query result format"
             else:
-                logger.error(f"No crypto data available for symbol {symbol}")
-                return None
+                return f"Failed to fetch data. Status code: {response.status_code}"
+        except requests.RequestException as e:
+            return f"Error fetching data: {str(e)}"
         except Exception as e:
-            error_message = f"Error fetching crypto data: {str(e)}"
-            logger.error(error_message)
-            return None
+            return f"An unexpected error occurred: {str(e)}"
 
 
 
-    def print_info(self):
-        while True:
-            self.buy_shares(self.symbol)  
-            print(f"Total cash: {self.total_cash}")
-            time.sleep(5)  
+
+
+    def on_trading_iteration(self):
+        try:
+            # Get data from the Bitquery query
+            query_result = self.get_bitquery_current_candle()
+            
+            # Check if the query result is valid
+            if 'ethereum' not in query_result or 'dexTrades' not in query_result['ethereum']:
+                logger.error("Invalid query result format")
+                return
+
+            # Extract relevant data for VWAP calculation
+            trades = query_result['ethereum']['dexTrades']
+
+            # Initialize lists to store trade prices and volumes
+            trade_prices = []
+            trade_volumes = []
+
+            # Extract trade prices and volumes
+            for trade in trades:
+                trade_prices.append(trade['quotePrice'])
+                trade_volumes.append(trade['volume'])
+
+            # Calculate VWAP manually
+            vwap = np.average(trade_prices, weights=trade_volumes)
+
+            # Log VWAP
+            logger.info(f"VWAP for {self.symbol}: {vwap}")
+
+            # Example of extracting required features from the query result
+            X = np.array([[trade_volume, vwap] for trade_volume in trade_volumes])
+            
+            # Make predictions
+            prediction = self.model.predict(X)[0]
+
+            # Log prediction
+            logger.info(f"Current prediction for {self.symbol}: {prediction}")
+
+            # Print current price as well
+            logger.info(f"Current price for {self.symbol}: {vwap}")
+
+            # Calculate the number of shares to buy or sell based on the VWAP and available cash
+            shares_to_trade = self.total_cash / vwap
+
+            # Make trading decision based on prediction
+            if prediction > vwap:
+                # Buy logic
+                self.buy_shares(self.symbol)
+            elif prediction < vwap:
+                # Sell logic
+                self.sell(vwap, prediction)
+            else:
+                logger.info("Holding position.")
+        except Exception as e:
+            logger.error(f"Error in trading iteration: {e}")
+
+
 
 if __name__ == "__main__":
     starting_cash = 10000  
-    symbol = 'BTCUSD'
+    symbol = 'BTCUSDC'
     api_key = 'FDPXMTIEJIP2N4TY'  
     
-    strategy = MLTrader(symbol='BTC/USD', starting_cash=starting_cash)
-    stock_data = strategy.get_crypto_data(symbol, api_key)
-    print(f"Stock data for {symbol}: {stock_data}")
+    # Assuming you have training data X_train and y_train
+    # Example training data
+    X_train = np.array([[100], [110], [120], [130], [140]])  # Example feature: current price
+    y_train = np.array([0, 1, 1, 0, 1])  # Example labels: 0 for sell, 1 for buy
 
-    # Create a thread for printing information periodically
-    print_thread = threading.Thread(target=strategy.print_info_periodically)
-    print_thread.daemon = True  # Set the thread as daemon so it exits when the main thread exits
-    print_thread.start()
+    # Instantiate MLTrader object
+    ml_trader = MLTrader(symbol='BTC/USDC', starting_cash=starting_cash)
 
-    # Add this line to keep the main thread running
+    # Train the model
+    ml_trader.model.fit(X_train, y_train)
+
+    # Start trading iterations
     while True:
+        ml_trader.on_trading_iteration()
         time.sleep(1)
