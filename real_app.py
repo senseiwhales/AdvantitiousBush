@@ -1,10 +1,12 @@
 import numpy as np
 import pandas as pd
 import os
+import time
+import threading
+import requests
 import logging
 import alpaca_trade_api as tradeapi
 import datetime
-from alpaca_trade_api.rest import TimeFrame
 
 API_KEY = 'PKYM7P7LWL9V2WLADG7P'
 API_SECRET = '7MZVax8cgg1wTzoUUKfocOPTyNgJrtOcmNYqIvka'
@@ -20,10 +22,13 @@ class DecisionTree:
         self.max_depth = max_depth
         self.max_features = max_features
         self.tree = None
+        self.current_price = None
+        self.total_cash = 0.0  # Initialize total_cash
+        self.api = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets')  # Initialize Alpaca API
 
     def fit(self, X, y):
         if self.max_features is not None:
-            self.max_features = min(self.max_features, X.shape[1])  # Ensure max_features does not exceed total features
+            self.max_features = min(self.max_features, X.shape[1])
         self.tree = self._build_tree(X, y, depth=0)
     
     def _build_tree(self, X, y, depth):
@@ -33,7 +38,7 @@ class DecisionTree:
         if depth == self.max_depth or n_labels == 1:
             leaf_value = self._compute_leaf_value(y)
             return {'leaf': True, 'value': leaf_value}
-
+          
         feature_indices = np.random.choice(n_features, size=self.max_features, replace=False)
         best_feature, best_threshold = self._find_best_split(X, y, feature_indices)
 
@@ -104,6 +109,38 @@ class DecisionTree:
         else:
             return self._traverse_tree(x, node['right'])
 
+
+    def _compute_gain(self, y, left_y, right_y):
+        n = len(y)
+        left_n = len(left_y)
+        right_n = len(right_y)
+
+        entropy_parent = self._compute_entropy(y)
+        entropy_children = (left_n / n) * self._compute_entropy(left_y) + (right_n / n) * self._compute_entropy(right_y)
+
+        return entropy_parent - entropy_children
+
+    def _compute_entropy(self, y):
+        _, counts = np.unique(y, return_counts=True)
+        probabilities = counts / len(y)
+        entropy = -np.sum(probabilities * np.log2(probabilities + 1e-10))
+        return entropy
+
+    def _compute_leaf_value(self, y):
+        return np.mean(y)
+
+    def predict(self, X):
+        return np.array([self._traverse_tree(x, self.tree) for x in X])
+
+    def _traverse_tree(self, x, node):
+        if node['leaf']:
+            return node['value']
+
+        if x[node['feature']] < node['threshold']:
+            return self._traverse_tree(x, node['left'])
+        else:
+            return self._traverse_tree(x, node['right'])
+
 class MLTrader:
     def __init__(self, symbol: str = "MAT", starting_cash: float = 10000):
         self.symbol = symbol
@@ -111,119 +148,160 @@ class MLTrader:
         self.model = DecisionTree(max_depth=10, max_features=3)
         self.trades = []
         self.alpaca = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets', api_version='v2')
-        self.previous_prediction = None  # Track previous prediction
-        
-    def on_trading_iteration(self):
-        data = self.load_data_from_csv('STOCK.csv')
-        if data is None or len(data) == 0:  # Check if data is empty
-            logger.error("Failed to load data or data is empty.")
-            return
-            
-        X = data  # Use closing prices as features
-        y = np.roll(X, -1)  # Predict the next closing price
+        self.previous_prediction = None  
+        self.current_price = None
+    
+    def print_info_periodically(self):
+        while True:
+            try:
+                if self.model.current_price is not None:
+                    logger.info(f"Current prediction for {self.symbol}: {self.previous_prediction}")
+                    logger.info(f"Current price for {self.symbol}: {self.model.current_price}")
+                else:
+                    logger.info("Current price is not available.")
+            except Exception as e:
+                logger.error(f"Error in printing information: {e}")
 
-        self.model.fit(X, y)
-            
-        if len(X) > 0:  # Check if X is not empty
+            time.sleep(5)  # Sleep for 5 seconds
+
+
+    def buy_shares(self, symbol):
+        try:
+            account = self.alpaca.get_account()
+            cash_available = float(account.cash)
+            if self.model.current_price is not None:
+                num_shares = cash_available / self.model.current_price
+            else:
+                num_shares = 0
+
+            self.alpaca.submit_order(
+                symbol=symbol,
+                qty=num_shares,
+                side='buy',
+                type='market',
+                time_in_force='gtc'
+            )
+        except tradeapi.rest.APIError as e:
+            logger.error(f"Failed to buy shares of {symbol}: {str(e)}")
+
+    def on_trading_iteration(self):
+        try:
+            # Load data from CSV file
+            dir_path = os.path.dirname(os.path.realpath(__file__))
+            file_path = os.path.join(dir_path, 'crypto.csv')
+            data = pd.read_csv(file_path)
+
+            if data is None or len(data) == 0:
+                logger.error("Failed to load crypto data or data is empty.")
+                return
+
+            # Extract features and target variable
+            X = data.drop(columns=['date']).values  # Remove date column and use the remaining columns as features
+            y = data['close'].shift(-1).values  # Shift the 'close' column by 1 to get the target variable
+
+            # Remove NaN values
+            X = X[:-1]  # Remove the last row of X to match the shifted y
+            y = y[:-1]  # Remove the last element of y
+
+            # Train the decision tree model
+            self.model.fit(X, y)
+
+            # Make predictions
             prediction = self.model.predict(X[-1].reshape(1, -1))[0]  # Predict next closing price
             current_price = X[-1][0]  # Current closing price
+            print(prediction)
+            
+            # Update previous prediction
+            self.previous_prediction = prediction
 
-            if self.previous_prediction != prediction:  # Print only if prediction changes
-                logger.info(f"Current prediction for {self.symbol}: {prediction}")  # Print current prediction
-                print(f"Current prediction for {self.symbol}: {prediction}")  # Print current prediction
-                self.previous_prediction = prediction  # Update previous prediction
+            # Print prediction and current price
+            logger.info(f"Current prediction for {self.symbol}: {prediction}")
+            logger.info(f"Current price for {self.symbol}: {current_price}")
+
+            # Calculate the number of shares to buy or sell based on the current price and available cash
+            shares_to_trade = self.total_cash / current_price
 
             # Make trading decision based on prediction
             if prediction > current_price:
                 # Buy logic
-                self.buy(1, current_price, prediction)  # Only buy 1 share
+                self.buy_shares(self.symbol)
             elif prediction < current_price:
                 # Sell logic
                 self.sell(current_price, prediction)
             else:
                 logger.info("Holding position.")
-        self.sell(current_price, prediction)
-    def buy(self, shares_to_trade, current_price, prediction):
-        try:
-            account_info = self.alpaca.get_account()
-            available_cash = float(account_info.buying_power)
-            cost_of_purchase = shares_to_trade * current_price
-            if cost_of_purchase > 0 and cost_of_purchase <= available_cash:  # Ensure sufficient cash balance for buying
-                if prediction > current_price:  # Check if the prediction is higher than the current price to trigger a buy
-                    order = self.alpaca.submit_order(
-                        symbol=self.symbol,
-                        qty=shares_to_trade,
-                        side='buy',
-                        type='market',
-                        time_in_force='day'  # Set time_in_force to 'day'
-                    )
-                    logger.info(f"Bought {shares_to_trade} shares of {self.symbol} at ${current_price}.")
-                    self.total_cash -= order.filled_qty * order.filled_avg_price  # Update total cash after buying
-                else:
-                    logger.info("Prediction is lower than current price. Not buying.")
-            else:
-                logger.info("Insufficient cash balance to buy.")
+
+            # Update current price
+            self.update_price('MAT')
         except Exception as e:
-            logger.error(f"Failed to buy {shares_to_trade} shares of {self.symbol}: {e}")
+            logger.error(f"Error in trading iteration: {e}")
 
+    
 
-    def sell(self, current_price, prediction):
+    def get_stock_data(self, symbol, api_key):
+        base_url = "https://www.alphavantage.co/query"
+        params = {
+            "function": "GLOBAL_QUOTE",
+            "symbol": symbol,
+            "apikey": api_key
+        }
+
         try:
-            positions = self.alpaca.list_positions()
-            symbol_position = next((pos for pos in positions if pos.symbol == self.symbol), None)
-            if symbol_position:
-                qty_to_sell = float(symbol_position.qty)
-                if qty_to_sell > 0 and prediction < current_price:  # Check prediction before selling
-                    order = self.alpaca.submit_order(
-                        symbol=self.symbol,
-                        qty=qty_to_sell,
-                        side='sell',
-                        type='market',
-                        time_in_force='day'
-                    )
-                    logger.info(f"Sold {qty_to_sell} shares of {self.symbol} at ${current_price}.")
-                    self.total_cash += order.filled_qty * order.filled_avg_price
+            response = requests.get(base_url, params=params)
+            data = response.json()
+            logger.info(f"Response from API: {data}")  # Log the response
+
+            if "Global Quote" in data:
+                quote_data = data["Global Quote"]
+                if quote_data and quote_data != {}:  # Check if quote_data is not empty
+                    stock_data = {
+                        "price": float(quote_data.get("05. price", 0)),  # Convert price to float, default to 0 if not available
+                        "volume": quote_data.get("06. volume"),
+                        "vwap": quote_data.get("07. vwap"),
+                        "open": quote_data.get("02. open"),
+                        "high": quote_data.get("03. high"),
+                        "low": quote_data.get("04. low"),
+                        "latest_trading_day": quote_data.get("07. latest trading day"),
+                        "previous_close": quote_data.get("08. previous close"),
+                        "change": quote_data.get("09. change"),
+                        "change_percent": quote_data.get("10. change percent")
+                    }
+                    logger.info(f"Fetched stock data for {symbol}: {stock_data}")
+                    return stock_data
                 else:
-                    logger.info("No shares to sell or prediction is not met.")
+                    logger.error(f"No data available for symbol {symbol}")
+                    return None
             else:
-                logger.info("No position found for the symbol.")
-        except Exception as e:
-            logger.error(f"Failed to sell {self.symbol}: {e}")
-
-    def load_data(self, symbols, timeframe):
-        try:
-            # Fetch current bar data for the symbol
-            barset = self.alpaca.get_bars(symbols[0], timeframe, limit=1)
-            if barset:
-                return barset.df  # Return the bar data for the specified symbol as a DataFrame
-            else:
-                logger.error(f"Failed to fetch data for {symbols[0]} from Alpaca.")
+                error_message = f"Data not found for symbol {symbol}"
+                logger.error(error_message)
                 return None
         except Exception as e:
-            logger.error(f"Error fetching data from Alpaca: {e}")
-            return None
-
-    def load_data_from_csv(self, filename):
-        try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))  # Get the directory of the current script
-            file_path = os.path.join(script_dir, filename)  # Combine script directory with filename
-            data = pd.read_csv(file_path)  # Load data from CSV file
-
-            # Extract relevant columns for features (v, vw, o, c, h, l) from the CSV data
-            X = data[['v', 'vw', 'o', 'c', 'h', 'l']].values
-
-            return X            
-        except Exception as e:
-            logger.error(f"Error loading data from CSV: {e}")
+            error_message = f"Error fetching data: {str(e)}"
+            logger.error(error_message)
             return None
 
 
+
+    def print_info(self):
+        while True:
+            self.buy_shares(self.symbol)  
+            print(f"Total cash: {self.total_cash}")
+            time.sleep(5)  
 
 if __name__ == "__main__":
-    starting_cash = 10000  # Set your desired starting cash here
-    strategy = MLTrader(symbol='MAT', starting_cash=starting_cash)
+    starting_cash = 10000  
+    symbol = 'MAT'  
+    api_key = 'FDPXMTIEJIP2N4TY'  
     
-    # Run trading iteration indefinitely
-    while True:
-        strategy.on_trading_iteration()
+    strategy = MLTrader(symbol='MAT', starting_cash=starting_cash)
+    stock_data = strategy.get_stock_data(symbol, api_key)
+    print(f"Stock data for {symbol}: {stock_data}")
 
+    # Create a thread for printing information periodically
+    print_thread = threading.Thread(target=strategy.print_info_periodically)
+    print_thread.daemon = True  # Set the thread as daemon so it exits when the main thread exits
+    print_thread.start()
+
+    # Add this line to keep the main thread running
+    while True:
+        time.sleep(1)
