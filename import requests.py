@@ -1,33 +1,63 @@
 import requests
+import datetime as dt
 
-def get_stock_price(symbol, api_key):
-    if not api_key:
-        return "API key is missing or invalid"
-
-    base_url = "https://www.alphavantage.co/query"
-    params = {
-        "function": "GLOBAL_QUOTE",
-        "symbol": symbol,
-        "apikey": api_key
+def get_bitquery_current_candle(symbol, interval='1h'):
+    base_url = 'https://graphql.bitquery.io/'
+    api_key = 'ory_at_w1pxPrnfJ0_73fkDGw5pTuUYzvkRkTNJ35Ve4olPxDI.mslrLWAnjZwBQX7b0AFK8yPlp08ijf7XlyOEpQ4DtjU'  # Replace 'YOUR_API_KEY' with your actual Bitquery API key
+    
+    # Set the start and end times for the current candle
+    end_time = dt.datetime.utcnow().replace(second=0, microsecond=0)  # Round down to the nearest minute (in UTC)
+    start_time = end_time - dt.timedelta(hours=1)  # 1 hour interval
+    
+    query = """
+query {
+  ethereum(network: bsc) {
+    dexTrades(
+      baseCurrency: {is: "%s"}
+      quoteCurrency: {is: "USD"}
+      interval: %s
+      exchangeName: {is: "Pancake"}
+      options: {desc: ["timeInterval.minute"]}
+      time: {since: "%s", till: "%s"}
+    ) {
+      timeInterval {
+        minute(count: 1)
+      }
+      baseCurrency {
+        symbol
+      }
+      quoteCurrency {
+        symbol
+      }
+      count
+      quotePrice
+      high: quotePrice(calculate: maximum)
+      low: quotePrice(calculate: minimum)
+      open: minimum(of: block, get: quote_price)
+      close: maximum(of: block, get: quote_price)
+      volume: quoteAmount
+      trades: count
     }
+  }
+}
+""" % (symbol.upper(), interval, start_time.isoformat(), end_time.isoformat())
 
+    headers = {
+        'Content-Type': 'application/json',
+        'X-API-KEY': api_key
+    }
+    
     try:
-        response = requests.get(base_url, params=params)
+        # Print the URL script
+        print("Requested query:", query)
         
-        # Check if the response status code is OK
+        response = requests.post(base_url, json={'query': query}, headers=headers)
         if response.status_code == 200:
             data = response.json()
-            # Check if the response contains the expected data
-            if "Global Quote" in data:
-                price_data = data["Global Quote"]
-                # Access the price directly from the response
-                current_price = price_data.get("05. price")
-                if current_price:
-                    return current_price
-                else:
-                    return f"Price not found for symbol {symbol}"
+            if 'data' in data and data['data'] and 'ethereum' in data['data'] and data['data']['ethereum'] and 'dexTrades' in data['data']['ethereum'] and data['data']['ethereum']['dexTrades']:
+                return data['data']['ethereum']['dexTrades'][0]  # Return the first (and only) candlestick in the list
             else:
-                return f"Price not found for symbol {symbol}"
+                return f"No data found for symbol {symbol} and interval {interval}"
         else:
             return f"Failed to fetch data. Status code: {response.status_code}"
     except requests.RequestException as e:
@@ -36,7 +66,8 @@ def get_stock_price(symbol, api_key):
         return f"An unexpected error occurred: {str(e)}"
 
 # Example usage
-symbol = 'BTCUSD'  # Replace with the stock symbol you want to fetch data for
-api_key = '7B7J6XY6GEMAKMB2'  # Replace with your Alpha Vantage API key
-stock_price = get_stock_price(symbol, api_key)
-print(f"Current price of {symbol}: {stock_price}")
+symbol = 'ETH'  # Replace with the cryptocurrency symbol you want to fetch data for
+interval = '1m'   # Replace with the desired interval ('1m', '5m', '15m', '30m', '1h', '4h', '1d')
+
+current_candle = get_bitquery_current_candle(symbol, interval)
+print(f"Current candle data for {symbol} ({interval}): {current_candle}")
