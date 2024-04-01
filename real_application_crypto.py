@@ -238,41 +238,48 @@ class MLTrader:
 
     
 
-    def get_stock_data(self, symbol, api_key):
+    def get_crypto_data(self, symbol, api_key):
         base_url = "https://www.alphavantage.co/query"
+        function = "CRYPTO_INTRADAY"  # Function to fetch intraday crypto data
+        interval = "30min"  # Interval for data (adjust as needed)
+        
         params = {
-            "function": "GLOBAL_QUOTE",
+            "function": function,
             "symbol": symbol,
+            "interval": interval,
             "apikey": api_key
         }
 
         try:
             response = requests.get(base_url, params=params)
             data = response.json()
-            if "Global Quote" in data:
-                quote_data = data["Global Quote"]
-                stock_data = {
-                    "price": float(quote_data.get("05. price")),  # Convert price to float
-                    "volume": quote_data.get("06. volume"),
-                    "vwap": quote_data.get("07. vwap"),
-                    "open": quote_data.get("02. open"),
-                    "high": quote_data.get("03. high"),
-                    "low": quote_data.get("04. low"),
-                    "latest_trading_day": quote_data.get("07. latest trading day"),
-                    "previous_close": quote_data.get("08. previous close"),
-                    "change": quote_data.get("09. change"),
-                    "change_percent": quote_data.get("10. change percent")
+            logger.info(f"Response from Alpha Vantage: {data}")  # Log the response
+
+            # Check if data contains the expected key for crypto data
+            if "Time Series Crypto (30min)" in data:
+                crypto_data = data["Time Series Crypto (30min)"]
+                # Extract the latest data point
+                latest_data = next(iter(crypto_data.values()))
+                # Extract relevant information (e.g., price)
+                price = float(latest_data.get("4. close"))  # Adjust key based on actual data structure
+                # Additional data processing as needed
+
+                # Construct the crypto data dictionary
+                crypto_data = {
+                    "price": price
+                    # Add other relevant data here
                 }
-                logger.info(f"Fetched stock data for {symbol}: {stock_data}")
-                return stock_data
+
+                logger.info(f"Fetched crypto data for {symbol}: {crypto_data}")
+                return crypto_data
             else:
-                error_message = f"Data not found for symbol {symbol}"
-                logger.error(error_message)
-                return error_message
+                logger.error(f"No crypto data available for symbol {symbol}")
+                return None
         except Exception as e:
-            error_message = f"Error fetching data: {str(e)}"
+            error_message = f"Error fetching crypto data: {str(e)}"
             logger.error(error_message)
-            return error_message
+            return None
+
 
 
     def print_info(self):
@@ -283,11 +290,11 @@ class MLTrader:
 
 if __name__ == "__main__":
     starting_cash = 10000  
-    symbol = 'BTC-USD'  
+    symbol = 'BTCUSD'
     api_key = 'FDPXMTIEJIP2N4TY'  
     
     strategy = MLTrader(symbol='BTC/USD', starting_cash=starting_cash)
-    stock_data = strategy.get_stock_data(symbol, api_key)
+    stock_data = strategy.get_crypto_data(symbol, api_key)
     print(f"Stock data for {symbol}: {stock_data}")
 
     # Create a thread for printing information periodically
