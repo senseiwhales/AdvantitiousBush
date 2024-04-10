@@ -105,9 +105,6 @@ class DecisionTree:
     def _compute_leaf_value(self, y):
         return np.mean(y)
 
-    def predict(self, X):
-        return np.array([self._traverse_tree(x, self.tree) for x in X])
-
     def _traverse_tree(self, x, node):
         if node['leaf']:
             return node['value']
@@ -126,7 +123,7 @@ class MLTrader:
         self.alpaca = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets', api_version='v2')
         self.previous_prediction = None  
         self.current_price = None
-        self.train_model()
+        self.train_model()  # Train the model at initialization
 
     def buy_shares(self, symbol, prediction_amount):
         try:
@@ -180,35 +177,37 @@ class MLTrader:
         base_url = 'https://graphql.bitquery.io/'
         api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
         
+        # Define the time range for the query
         now = datetime.datetime.utcnow()
-        start_time = now - datetime.timedelta(minutes=30)
+        start_time = now - datetime.timedelta(minutes=30)  # Fetch data for the last 30 minutes
         since = start_time.isoformat() + 'Z'
         till = now.isoformat() + 'Z'
 
         query = """
-        query {{
-            ethereum(network: bsc) {{
-                dexTrades(
-                    baseCurrency: {{is: "0x2170ed0880ac9a755fd29b2688956bd959f933f8"}},
-                    quoteCurrency: {{is: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"}},
-                    exchangeName: {{is: "Pancake"}},
-                    options: {{desc: ["timeInterval.minute"]}},
-                    time: {{since: "{}", till: "{}"}}
-                ) {{
-                    timeInterval {{
-                        minute(count: 30)
-                    }}
-                    count
-                    quotePrice
-                    high: quotePrice(calculate: maximum)
-                    low: quotePrice(calculate: minimum)
-                    open: minimum(of: block, get: quote_price)
-                    close: maximum(of: block, get: quote_price)
-                    volume: quoteAmount
-                }}
-            }}
-        }}
-        """.format(since, till)
+        query {
+        ethereum(network: bsc) {
+            dexTrades(
+            options: { limit: 100, asc: "timeInterval.minute" }
+            date: { since: "%s", till: "%s" }
+            exchangeName: { in: ["Pancake"] }
+            baseCurrency: {is: "0x2170ed0880ac9a755fd29b2688956bd959f933f8"}
+            quoteCurrency: {is: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"}
+            ) {
+            timeInterval {
+                minute(count: 30)
+            }
+            count
+            quotePrice
+            high: quotePrice(calculate: maximum)
+            low: quotePrice(calculate: minimum)
+            open: minimum(of: block, get: quote_price)
+            close: maximum(of: block, get: quote_price)
+            volume: quoteAmount
+            }
+        }
+        }
+
+        """ % (since, till)
 
         headers = {
             'Content-Type': 'application/json',
@@ -217,14 +216,11 @@ class MLTrader:
 
         try:
             response = requests.post(base_url, json={'query': query}, headers=headers)
-            response.raise_for_status()
+            response.raise_for_status()  # Raise exception for non-200 status codes
             data = response.json()
 
             if 'data' in data and 'ethereum' in data['data'] and 'dexTrades' in data['data']['ethereum']:
                 dex_trades = data['data']['ethereum']['dexTrades']
-                if not dex_trades:
-                    logger.error("No trade volumes found.")
-                    return None
                 formatted_trades = []
                 for trade in dex_trades:
                     formatted_trade = {
@@ -241,14 +237,14 @@ class MLTrader:
                 return {'ethereum': {'dexTrades': formatted_trades}}
             else:
                 logger.error("Invalid query result format")
-                logger.error(data)
-                return None
+                logger.error(data)  # Log the response for further inspection
+                return {}  # Return an empty dictionary when no trade volumes are found
         except requests.RequestException as e:
             logger.error(f"Error fetching data: {str(e)}")
-            return None
+            return {}
         except Exception as e:
             logger.error(f"An unexpected error occurred: {str(e)}")
-            return None
+            return {}
 
     def on_trading_iteration(self):
         try:
@@ -260,6 +256,10 @@ class MLTrader:
 
             trades = query_result['ethereum']['dexTrades']
 
+            if not trades:
+                logger.warning("No trades found in the queried data.")
+                return
+
             trade_prices = []
             trade_volumes = []
 
@@ -268,7 +268,7 @@ class MLTrader:
                 trade_volumes.append(trade['volume'])
 
             if not trade_volumes:
-                logger.error("No trade volumes found.")
+                logger.warning("No trade volumes found.")
                 return
 
             vwap = np.average(trade_prices, weights=trade_volumes)
@@ -278,17 +278,29 @@ class MLTrader:
             X = np.array([[trade_volume, vwap] for trade_volume in trade_volumes])
 
             future_price_prediction = self.model.predict(X[-1])
-
+            print("Future Price Prediction:", future_price_prediction)
             prediction_mean = np.mean(future_price_prediction)
+            print("Prediction Mean:", prediction_mean)
+
             if prediction_mean > vwap and self.previous_prediction is not None and self.previous_prediction <= vwap:
                 prediction_amount = 1.5
                 shares_to_buy = self.total_cash / vwap * prediction_amount
                 self.buy_shares(self.symbol, shares_to_buy)
                 logger.info("New position: Buying shares.")
-            elif prediction_mean <= vwap and self.previous_prediction is not None and self.previous_prediction > vwap:
-                logger.info("Holding position.")
+
+            if prediction_mean <= vwap and self.previous_prediction is not None and self.previous_prediction > vwap:
+                logger.info("Selling all shares.")
+                self.sell_all_shares(self.symbol)
+
+            logger.info("Queried Data:")
+            logger.info(trades)  # Print the queried data
+            logger.info(f"Predicted Price: {prediction_mean}")  # Print the predicted price
 
             self.previous_prediction = prediction_mean
+
+        except Exception as e:
+            logger.error(f"Error in trading iteration: {e}")
+
 
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
