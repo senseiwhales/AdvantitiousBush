@@ -168,10 +168,15 @@ class MLTrader:
         file_path = os.path.join(script_dir, filename)
         data = pd.read_csv(file_path)
         data.columns = ['v', 'vw', 'o', 'c', 'h', 'l', 't', 'n']
-        data = data[['v', 'vw', 'o', 'c', 'h', 'l', 't', 'n']]
-        X = data.values
-        y = np.zeros(X.shape[0])
+
+        # Assuming the target variable is the closing price (can be modified based on your data)
+        y = data['c']  # Closing price represents future price
+
+        # Rest of the code remains the same...
+
+        X = data.values[:, :-1]  # All columns except closing price for features
         return X, y
+
 
     def get_bitquery_current_candle(self):
         base_url = 'https://graphql.bitquery.io/'
@@ -275,9 +280,32 @@ class MLTrader:
 
             self.model.current_price = vwap
 
-            X = np.array([[trade_volume, vwap] for trade_volume in trade_volumes])
+            if len(trade_volumes) < 4:
+                logger.warning("Insufficient trade volumes for prediction.")
+                return
 
-            future_price_prediction = self.model.predict(X[-1])
+            X = np.array([[trade_volume, vwap] for trade_volume in trade_volumes])
+            print(f"X array size: {X.shape[0]}")
+
+            if len(X) == 0:
+                logger.warning("Empty feature array X.")
+                return
+
+            # Manual Feature Scaling
+            # Assuming features are numerical (trade_volume, vwap)
+            # Find min and max values for each feature
+            feature_min = np.amin(X, axis=0)
+            feature_max = np.amax(X, axis=0)
+
+            # Scale features between 0 and 1
+            X_scaled = (X - feature_min) / (feature_max - feature_min)
+
+            future_price_prediction = self.model.predict(X_scaled if X_scaled.shape[0] > 0 else X)
+
+            if len(future_price_prediction) == 0:
+                logger.warning("Empty prediction array.")
+                return
+
             print("Future Price Prediction:", future_price_prediction)
             prediction_mean = np.mean(future_price_prediction)
             print("Prediction Mean:", prediction_mean)
@@ -302,8 +330,9 @@ class MLTrader:
             logger.error(f"Error in trading iteration: {e}")
 
 
-        except Exception as e:
-            logger.error(f"Error in trading iteration: {e}")
+
+
+
 
     def train_model(self):
         X_train, y_train = self.load_data('crypto.csv')
