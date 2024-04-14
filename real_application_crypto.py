@@ -7,6 +7,7 @@ import requests
 import logging
 import alpaca_trade_api as tradeapi
 import datetime
+import json
 
 API_KEY = 'PKYM7P7LWL9V2WLADG7P'
 API_SECRET = '7MZVax8cgg1wTzoUUKfocOPTyNgJrtOcmNYqIvka'
@@ -177,7 +178,6 @@ class MLTrader:
         X = data.values[:, :-1]  # All columns except closing price for features
         return X, y
 
-
     def get_bitquery_current_candle(self):
         base_url = 'https://graphql.bitquery.io/'
         api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
@@ -190,28 +190,27 @@ class MLTrader:
 
         query = """
         query {
-        ethereum(network: bsc) {
-            dexTrades(
-            options: { limit: 100, asc: "timeInterval.minute" }
-            date: { since: "%s", till: "%s" }
-            exchangeName: { in: ["Pancake"] }
-            baseCurrency: {is: "0x2170ed0880ac9a755fd29b2688956bd959f933f8"}
-            quoteCurrency: {is: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"}
-            ) {
-            timeInterval {
-                minute(count: 30)
-            }
-            count
-            quotePrice
-            high: quotePrice(calculate: maximum)
-            low: quotePrice(calculate: minimum)
-            open: minimum(of: block, get: quote_price)
-            close: maximum(of: block, get: quote_price)
-            volume: quoteAmount
+            ethereum(network: bsc) {
+                dexTrades(
+                    options: { limit: 100, asc: "timeInterval.minute" }
+                    date: { since: "%s", till: "%s" }
+                    exchangeName: { in: ["Pancake"] }
+                    baseCurrency: {is: "0x2170ed0880ac9a755fd29b2688956bd959f933f8"}
+                    quoteCurrency: {is: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"}
+                ) {
+                    timeInterval {
+                        minute(count: 30)
+                    }
+                    count
+                    quotePrice
+                    high: quotePrice(calculate: maximum)
+                    low: quotePrice(calculate: minimum)
+                    open: minimum(of: block, get: quote_price)
+                    close: maximum(of: block, get: quote_price)
+                    volume: quoteAmount
+                }
             }
         }
-        }
-
         """ % (since, till)
 
         headers = {
@@ -222,7 +221,11 @@ class MLTrader:
         try:
             response = requests.post(base_url, json={'query': query}, headers=headers)
             response.raise_for_status()  # Raise exception for non-200 status codes
+
             data = response.json()
+
+            # Log the fetched data
+            logger.info(f"Fetched data from Bitquery API: {json.dumps(data, indent=4)}")
 
             if 'data' in data and 'ethereum' in data['data'] and 'dexTrades' in data['data']['ethereum']:
                 dex_trades = data['data']['ethereum']['dexTrades']
@@ -250,6 +253,7 @@ class MLTrader:
         except Exception as e:
             logger.error(f"An unexpected error occurred: {str(e)}")
             return {}
+
 
     def on_trading_iteration(self):
         try:
@@ -328,11 +332,6 @@ class MLTrader:
 
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
-
-
-
-
-
 
     def train_model(self):
         X_train, y_train = self.load_data('crypto.csv')
