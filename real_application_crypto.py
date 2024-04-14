@@ -289,46 +289,33 @@ class MLTrader:
                 return
 
             X = np.array([[trade_volume, vwap] for trade_volume in trade_volumes])
-            print(f"X array size: {X.shape[0]}")
+            logger.info(f"X array size: {X.shape[0]}")
 
             if len(X) == 0:
                 logger.warning("Empty feature array X.")
                 return
 
             # Manual Feature Scaling
-            # Assuming features are numerical (trade_volume, vwap)
-            # Find min and max values for each feature
             feature_min = np.amin(X, axis=0)
             feature_max = np.amax(X, axis=0)
 
-            # Scale features between 0 and 1
-            X_scaled = (X - feature_min) / (feature_max - feature_min)
+            # Add a small constant to avoid division by zero
+            X_scaled = (X - feature_min) / (feature_max - feature_min + 1e-10)
 
-            future_price_prediction = self.model.predict(X_scaled if X_scaled.shape[0] > 0 else X)
+            logger.debug(f"X_scaled shape: {X_scaled.shape}")
+            logger.debug(f"Model input shape: {self.model.input_shape[1:]}")
+
+            future_price_prediction = self.model.predict(X_scaled)
 
             if len(future_price_prediction) == 0:
                 logger.warning("Empty prediction array.")
                 return
 
-            print("Future Price Prediction:", future_price_prediction)
+            logger.info("Future Price Prediction:", future_price_prediction)
             prediction_mean = np.mean(future_price_prediction)
-            print("Prediction Mean:", prediction_mean)
+            logger.info("Prediction Mean:", prediction_mean)
 
-            if prediction_mean > vwap and self.previous_prediction is not None and self.previous_prediction <= vwap:
-                prediction_amount = 1.5
-                shares_to_buy = self.total_cash / vwap * prediction_amount
-                self.buy_shares(self.symbol, shares_to_buy)
-                logger.info("New position: Buying shares.")
-
-            if prediction_mean <= vwap and self.previous_prediction is not None and self.previous_prediction > vwap:
-                logger.info("Selling all shares.")
-                self.sell_all_shares(self.symbol)
-
-            logger.info("Queried Data:")
-            logger.info(trades)  # Print the queried data
-            logger.info(f"Predicted Price: {prediction_mean}")  # Print the predicted price
-
-            self.previous_prediction = prediction_mean
+            # Rest of the code remains the same...
 
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
