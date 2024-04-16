@@ -2,12 +2,10 @@ import numpy as np
 import pandas as pd
 import os
 import time
-import threading
 import requests
 import logging
 import alpaca_trade_api as tradeapi
 import datetime
-import json
 
 API_KEY = 'PKYM7P7LWL9V2WLADG7P'
 API_SECRET = '7MZVax8cgg1wTzoUUKfocOPTyNgJrtOcmNYqIvka'
@@ -18,18 +16,17 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 class DecisionTree:
-    def __init__(self, max_depth=None, max_features=None):
+    def __init__(self, max_depth=None, max_features=None, api=None):
         self.max_depth = max_depth
         self.max_features = max_features
         self.tree = None
-        self.current_price = None
-        self.total_cash = 0
-        self.api = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets')
+        self.api = api
 
     def fit(self, X, y):
         if self.max_features is not None:
             self.max_features = min(self.max_features, X.shape[1])
         self.tree = self._build_tree(X, y, depth=0)
+        self.input_shape = X.shape  # Define input_shape attribute
     
     def make_prediction(self, features):
         if self.tree is not None:
@@ -116,14 +113,11 @@ class DecisionTree:
             return self._traverse_tree(x, node['right'])
 
 class MLTrader:
-    def __init__(self, symbol: str = "ETHUSD", starting_cash: float = 10000):
+    def __init__(self, symbol, api):
         self.symbol = symbol
-        self.total_cash = starting_cash
-        self.model = DecisionTree(max_depth=10, max_features=3)
-        self.trades = []
+        self.api = api
         self.alpaca = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets', api_version='v2')
-        self.previous_prediction = None  
-        self.current_price = None
+        self.model = DecisionTree(max_depth=10, max_features=3)
         self.train_model()  # Train the model at initialization
 
     def buy_shares(self, symbol, prediction_amount):
@@ -144,6 +138,8 @@ class MLTrader:
             )
         except tradeapi.rest.APIError as e:
             logger.error(f"Failed to buy shares of {symbol}: {str(e)}")
+        except Exception as e:
+            logger.error(f"An unexpected error occurred: {str(e)}")
 
     def sell_all_shares(self, symbol):
         try:
@@ -163,28 +159,37 @@ class MLTrader:
                 logger.info(f"No position found for {symbol}.")
         except tradeapi.rest.APIError as e:
             logger.error(f"Failed to sell all shares of {symbol}: {str(e)}")
+        except Exception as e:
+            logger.error(f"An unexpected error occurred: {str(e)}")
 
     def load_data(self, filename):
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(script_dir, filename)
-        data = pd.read_csv(file_path)
-        data.columns = ['v', 'vw', 'o', 'c', 'h', 'l', 't', 'n']
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            file_path = os.path.join(script_dir, filename)
+            data = pd.read_csv(file_path)
+            data.columns = ['v', 'vw', 'o', 'c', 'h', 'l', 't', 'n']
 
-        # Assuming the target variable is the closing price (can be modified based on your data)
-        y = data['c']  # Closing price represents future price
+            # Assuming the target variable is the closing price (can be modified based on your data)
+            y = data['c']  # Closing price represents future price
 
-        # Rest of the code remains the same...
-
-        X = data.values[:, :-1]  # All columns except closing price for features
-        return X, y
+            X = data.values[:, :-1]  # All columns except closing price for features
+            return X, y
+        except FileNotFoundError:
+            logger.error(f"Data file '{filename}' not found.")
+            return None, None
+        except Exception as e:
+            logger.error(f"An unexpected error occurred while loading data: {str(e)}")
+            return None, None
 
     def get_bitquery_current_candle(self):
         base_url = 'https://graphql.bitquery.io/'
         api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
-        
-        # Define the time range for the query
+
         now = datetime.datetime.utcnow()
-        start_time = now - datetime.timedelta(minutes=30)  # Fetch data for the last 30 minutes
+        intervals = 30
+        interval_minutes = 30
+
+        start_time = now - datetime.timedelta(minutes=interval_minutes * intervals)
         since = start_time.isoformat() + 'Z'
         till = now.isoformat() + 'Z'
 
@@ -199,7 +204,7 @@ class MLTrader:
                     quoteCurrency: {is: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"}
                 ) {
                     timeInterval {
-                        minute(count: 30)
+                        minute(count: %d)
                     }
                     count
                     quotePrice
@@ -211,7 +216,9 @@ class MLTrader:
                 }
             }
         }
-        """ % (since, till)
+        """ % (since, till, interval_minutes * intervals)
+
+        logger.info("Query sent to Bitquery API: \n" + query)  # Log the query string before making the request
 
         headers = {
             'Content-Type': 'application/json',
@@ -224,29 +231,19 @@ class MLTrader:
 
             data = response.json()
 
-            # Log the fetched data
-            logger.info(f"Fetched data from Bitquery API: {json.dumps(data, indent=4)}")
-
             if 'data' in data and 'ethereum' in data['data'] and 'dexTrades' in data['data']['ethereum']:
                 dex_trades = data['data']['ethereum']['dexTrades']
-                formatted_trades = []
-                for trade in dex_trades:
-                    formatted_trade = {
-                        'timeInterval': {'minute': trade['timeInterval']['minute']},
-                        'count': trade['count'],
-                        'quotePrice': trade['quotePrice'],
-                        'high': trade['high'],
-                        'low': trade['low'],
-                        'open': trade['open'],
-                        'close': trade['close'],
-                        'volume': trade['volume']
-                    }
-                    formatted_trades.append(formatted_trade)
-                return {'ethereum': {'dexTrades': formatted_trades}}
+
+                if not dex_trades:
+                    logger.warning("No trades found in the queried data.")
+                    return {}
+
+                return {'ethereum': {'dexTrades': dex_trades}}
             else:
                 logger.error("Invalid query result format")
                 logger.error(data)  # Log the response for further inspection
                 return {}  # Return an empty dictionary when no trade volumes are found
+
         except requests.RequestException as e:
             logger.error(f"Error fetching data: {str(e)}")
             return {}
@@ -304,9 +301,9 @@ class MLTrader:
 
             logger.debug(f"X_scaled shape: {X_scaled.shape}")
             logger.debug(f"Model input shape: {self.model.input_shape[1:]}")
-
+  
             future_price_prediction = self.model.predict(X_scaled)
-
+            
             if len(future_price_prediction) == 0:
                 logger.warning("Empty prediction array.")
                 return
@@ -315,23 +312,22 @@ class MLTrader:
             prediction_mean = np.mean(future_price_prediction)
             logger.info("Prediction Mean:", prediction_mean)
 
-            # Rest of the code remains the same...
-
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
 
     def train_model(self):
         X_train, y_train = self.load_data('crypto.csv')
-        idx = np.random.permutation(len(X_train))
-        X_train, y_train = X_train[idx], y_train[idx]
-        self.model.fit(X_train, y_train)
-        logger.info("Training finished.")
+        if X_train is not None and y_train is not None:
+            idx = np.random.permutation(len(X_train))
+            X_train, y_train = X_train[idx], y_train[idx]
+            self.model.fit(X_train, y_train)
+            logger.info("Training finished.")
 
 if __name__ == "__main__":
-    starting_cash = 10000
     symbol = 'ETHUSD'
+    alpaca_api = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets', api_version='v2')
 
-    ml_trader = MLTrader(symbol='ETHUSD', starting_cash=starting_cash)
+    ml_trader = MLTrader(symbol='ETHUSD', api=alpaca_api)
 
     while True:
         ml_trader.on_trading_iteration()
