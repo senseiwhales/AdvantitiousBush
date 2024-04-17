@@ -6,7 +6,7 @@ import requests
 import logging
 import alpaca_trade_api as tradeapi
 import datetime
-from xgboost import XGBRegressor
+from sklearn.svm import SVR
 
 CandleNumber = 1
 
@@ -23,9 +23,11 @@ class MLTrader:
         self.symbol = symbol
         self.api = api
         self.alpaca = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets', api_version='v2')
-        self.models = [XGBRegressor(n_estimators=100, max_depth=5, learning_rate=0.1)]  # Initialize XGBoost model
+        self.models = [SVR(kernel='rbf')]  # Initialize SVM model with radial basis function kernel
+        self.current_position = 'flat'  # Initialize current_position attribute
+        self.set_random_seed()  # Add this line here
         self.train_models()  # Train the models at initialization
-        self.update_current_position()  # Update the current position at initialization
+
 
     def update_current_position(self):
         try:
@@ -113,7 +115,7 @@ class MLTrader:
         now = datetime.datetime.utcnow()
         interval_minutes = 30
 
-        start_time = now - datetime.timedelta(minutes=interval_minutes * 1000)
+        start_time = now - datetime.timedelta(minutes=interval_minutes * 100)
         since = start_time.isoformat() + 'Z'
         till = now.isoformat() + 'Z'
 
@@ -175,7 +177,7 @@ class MLTrader:
 
     def on_trading_iteration(self):
         try:
-
+            self.train_models()
             query_result = self.get_bitquery_current_candle()
 
             if query_result is None:
@@ -257,7 +259,10 @@ class MLTrader:
 
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
-
+    
+    def set_random_seed(self):
+        seed_value = 123  # You can change this seed value
+        np.random.seed(seed_value)
 
     def train_models(self):
         X_train, y_train = self.load_data('crypto.csv')
@@ -265,7 +270,7 @@ class MLTrader:
             idx = np.random.permutation(len(X_train))
             X_train, y_train = X_train[idx], y_train[idx]
             for model in self.models:
-                model.fit(X_train, y_train, eval_metric='rmse')  # Adjusted to fit XGBoost's API
+                model.fit(X_train, y_train)  # Fit the SVM model
             logger.info("Training finished.")
 
 if __name__ == "__main__":
