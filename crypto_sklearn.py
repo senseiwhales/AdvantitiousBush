@@ -8,8 +8,10 @@ import alpaca_trade_api as tradeapi
 import datetime
 from sklearn.tree import DecisionTreeRegressor
 
-API_KEY = 'PKYM7P7LWL9V2WLADG7P'
-API_SECRET = '7MZVax8cgg1wTzoUUKfocOPTyNgJrtOcmNYqIvka'
+CandleNumber = 1
+
+API_KEY = 'PKZYTDU16C4GW63TOV68'
+API_SECRET = 'si6tzwHML9ZS2BLd0IktHkC2K6KkaZdOAACn0JhR'
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -23,6 +25,20 @@ class MLTrader:
         self.alpaca = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets', api_version='v2')
         self.models = [DecisionTreeRegressor(max_depth=100, max_features=30) for _ in range(10)]
         self.train_models()  # Train the models at initialization
+        self.update_current_position()  # Update the current position at initialization
+
+    def update_current_position(self):
+        try:
+            position = self.alpaca.get_position(self.symbol)
+            if position is not None:
+                self.current_position = 'long' if float(position.qty) > 0 else 'flat'
+            else:
+                self.current_position = 'flat'
+        except tradeapi.rest.APIError as e:
+            if e.status_code == 404:
+                self.current_position = 'flat'  # Set position to flat if it doesn't exist
+            else:
+                logger.error(f"Failed to get position for {self.symbol}: {str(e)}")
 
     def buy_shares(self, symbol, prediction_amount):
         try:
@@ -39,7 +55,10 @@ class MLTrader:
                 qty=num_shares,
                 side='buy',
                 type='market',
+                time_in_force='gtc'
             )
+            self.current_position = 'long'
+            logger.info("Bought %s shares of %s", num_shares, symbol)
         except tradeapi.rest.APIError as e:
             logger.error(f"Failed to buy shares of {symbol}: {str(e)}")
         except Exception as e:
@@ -59,6 +78,8 @@ class MLTrader:
                     type='market',
                     time_in_force='gtc'
                 )
+                self.current_position = 'flat'
+                logger.info("Sold all shares of %s", symbol)
             else:
                 logger.info(f"No position found for {symbol}.")
         except tradeapi.rest.APIError as e:
@@ -152,9 +173,9 @@ class MLTrader:
             logger.error(f"An unexpected error occurred: {str(e)}")
             return {}
 
-    def on_trading_iteration(self, iteration):
+    def on_trading_iteration(self):
         try:
-            logger.info(f"Current trading iteration: {iteration}")
+
             query_result = self.get_bitquery_current_candle()
 
             if query_result is None:
@@ -204,18 +225,39 @@ class MLTrader:
                 future_price_predictions.append(future_price_prediction)
 
             future_price_predictions = np.array(future_price_predictions)
-            averaged_predictions = np.mean(future_price_predictions, axis=0)
 
-            # Retrain the models after prediction
-            X_train, y_train = self.load_data('crypto.csv')
-            if X_train is not None and y_train is not None:
-                idx = np.random.permutation(len(X_train))
-                X_train, y_train = X_train[idx], y_train[idx]
-                for model in self.models:
-                    model.fit(X_train, y_train)
+            # Use the average of predictions as the signal
+            averaged_predictions = np.mean(future_price_predictions)
+
+            # Determine the action based on the prediction
+            if averaged_predictions > vwap and self.current_position != 'long':
+                action = 'Buy'
+            elif averaged_predictions < vwap and self.current_position == 'long':
+                action = 'Sell'
+            else:
+                action = 'Hold'
+
+            # Determine the side based on the action
+            side = 'Buy' if action == 'Buy' else 'Sell'
+
+            # Print out the information
+            print("Candle", CandleNumber)
+            print("  Current Price:", vwap)
+            print("  Predicted Price:", averaged_predictions)
+            print("  Side:", side)
+            print("  Action Taken:", 'Yes' if action != 'Hold' else 'No')
+
+            # Trading logic based on prediction
+            if averaged_predictions > vwap and self.current_position != 'long':  # Buy signal
+                self.buy_shares(self.symbol, 0.1)  # Buy 10% of available cash
+                logger.info("Predicted price (%f) is higher than VWAP (%f). Buying.", averaged_predictions, vwap)
+            elif averaged_predictions < vwap and self.current_position == 'long':  # Sell signal
+                self.sell_all_shares(self.symbol)
+                logger.info("Predicted price (%f) is lower than VWAP (%f). Selling.", averaged_predictions, vwap)
 
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
+
 
     def train_models(self):
         X_train, y_train = self.load_data('crypto.csv')
@@ -231,22 +273,9 @@ if __name__ == "__main__":
     alpaca_api = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets', api_version='v2')
 
     ml_trader = MLTrader(symbol='ETHUSD', api=alpaca_api)
-    iteration = 1
 
-    while iteration <= 3:
-        ml_trader.on_trading_iteration(iteration)
-        time.sleep(1)
-        iteration += 1
-
-    # Load data for prediction
-    X, _ = ml_trader.load_data('crypto.csv')
-
-    if X is not None:
-        # Calculate and print the result for the next 30-minute candle after 10 iterations
-        average_prediction = np.mean([model.predict(X) for model in ml_trader.models], axis=0)
-        logger.info("Average Prediction for the next 30-minute candle after 3 iterations: %s", average_prediction[0])
-
-        # Log the current price of the coin
-        logger.info("Current price of the coin: %s", ml_trader.models[0].current_price)
-    else:
-        logger.error("Failed to load data for prediction.")
+    # Loop to run every 30 minutes
+    while True:
+        ml_trader.on_trading_iteration()
+        CandleNumber += 1
+        time.sleep(10)  # Sleep for 30 minutes
