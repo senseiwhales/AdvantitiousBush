@@ -1,11 +1,9 @@
 import numpy as np
-import pandas as pd
-import os
-import time
 import requests
 import logging
 import alpaca_trade_api as tradeapi
 import datetime
+import pandas as pd
 from sklearn.svm import SVR
 
 CandleNumber = 1
@@ -28,18 +26,95 @@ class MLTrader:
         self.set_random_seed()  # Add this line here
         self.train_models()  # Train the models at initialization
 
-    def update_current_position(self):
+    def train_models(self):
+        # Load the data
+        X, y = self.load_data("crypto.csv")
+
+        if X is None or y is None:
+            logger.error("Failed to load data. Training models aborted.")
+            return
+
+        # Split the data into training and testing sets
+        from sklearn.model_selection import train_test_split
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        # Train each model
+        for model in self.models:
+            try:
+                logger.info(f"Training {model.__class__.__name__}...")
+                model.fit(X_train, y_train)
+                logger.info(f"{model.__class__.__name__} trained successfully.")
+            except Exception as e:
+                logger.error(f"Error training {model.__class__.__name__}: {str(e)}")
+
+    def get_bitquery_last_candle(self):
+        base_url = 'https://graphql.bitquery.io/'
+        api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
+
+        query = """
+        {
+            ethereum(network: bsc) {
+                dexTrades(
+                    options: {limit: 1, desc: "timeInterval.minute"}
+                    date: {since: "2021-01-01"}
+                    exchangeName: {is: "Pancake v2"}
+                    baseCurrency: {is: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"}
+                    quoteCurrency: {is: "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82"}
+                ) {
+                    timeInterval {
+                        minute(count: 1)
+                    }
+                    trades: count
+                    open: minimum(of: block, get: quote_price)
+                    close: maximum(of: block, get: quote_price)
+                    high: quotePrice(calculate: maximum)
+                    low: quotePrice(calculate: minimum)
+                    volume: quoteAmount
+                    baseCurrency {
+                        symbol
+                    }
+                    quoteCurrency {
+                        symbol
+                    }
+                }
+            }
+        }
+        """
+
+        headers = {
+            'Content-Type': 'application/json',
+            'X-API-KEY': api_key
+        }
+
         try:
-            position = self.alpaca.get_position(self.symbol)
-            if position is not None:
-                self.current_position = 'long' if float(position.qty) > 0 else 'flat'
+            response = requests.post(base_url, json={'query': query}, headers=headers)
+            response.raise_for_status()
+
+            data = response.json()
+
+            if 'data' in data and 'ethereum' in data['data'] and 'dexTrades' in data['data']['ethereum']:
+                dex_trades = data['data']['ethereum']['dexTrades']
+
+                if not dex_trades:
+                    logger.warning("No trades found in the queried data.")
+                    return None
+
+                return dex_trades[0]  # Return the latest candle data
+
             else:
-                self.current_position = 'flat'
-        except tradeapi.rest.APIError as e:
-            if e.status_code == 404:
-                self.current_position = 'flat'  # Set position to flat if it doesn't exist
-            else:
-                logger.error(f"Failed to get position for {self.symbol}: {str(e)}")
+                logger.error("Invalid query result format")
+                logger.error(data)
+                return None
+
+        except requests.RequestException as e:
+            logger.error(f"Error fetching data: {str(e)}")
+            return None
+        except Exception as e:
+            logger.error(f"An unexpected error occurred: {str(e)}")
+            return None
+
+    def set_random_seed(self):
+        np.random.seed(123)  # Set the random seed to a fixed value
 
     def buy_shares(self, symbol, prediction_amount):
         try:
@@ -90,15 +165,11 @@ class MLTrader:
 
     def load_data(self, filename):
         try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            file_path = os.path.join(script_dir, filename)
-            data = pd.read_csv(file_path)
+            data = pd.read_csv(filename)
             data.columns = ['v', 'vw', 'o', 'c', 'h', 'l', 't', 'n']
 
-            # Assuming the target variable is the closing price (can be modified based on your data)
-            y = data['c']  # Closing price represents future price
-
-            X = data.values[:, :-1]  # All columns except closing price for features
+            y = data['c']
+            X = data.values[:, :-1]
             return X, y
         except FileNotFoundError:
             logger.error(f"Data file '{filename}' not found.")
@@ -107,41 +178,39 @@ class MLTrader:
             logger.error(f"An unexpected error occurred while loading data: {str(e)}")
             return None, None
 
-    def get_bitquery_current_candle(self):
+    def fetch_past_candle_data(self):
         base_url = 'https://graphql.bitquery.io/'
         api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
 
-        now = datetime.datetime.utcnow()
-        interval_minutes = 30
-
-        start_time = now - datetime.timedelta(minutes=(interval_minutes * 0))
-        since = start_time.isoformat() + 'Z'
-        till = now.isoformat() + 'Z'
-
         query = """
-        query {
+        {
             ethereum(network: bsc) {
                 dexTrades(
-                    options: { limit: 30, desc: "timeInterval.minute" }
-                    date: { since: "%s", till: "%s" }
-                    exchangeName: { in: ["Pancake"] }
-                    baseCurrency: {is: "0x2170ed0880ac9a755fd29b2688956bd959f933f8"}
-                    quoteCurrency: {is: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"}
+                    options: {limit: 1000, asc: "timeInterval.minute"}
+                    date: {since: "2021-01-01"}
+                    exchangeName: {is: "Pancake v2"}
+                    baseCurrency: {is: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"}
+                    quoteCurrency: {is: "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82"}
                 ) {
                     timeInterval {
-                        minute(count: %d)
+                        minute(count: 5)
                     }
-                    count
-                    quotePrice
-                    high: quotePrice(calculate: maximum)
-                    low: quotePrice(calculate: minimum)
+                    trades: count
                     open: minimum(of: block, get: quote_price)
                     close: maximum(of: block, get: quote_price)
+                    high: quotePrice(calculate: maximum)
+                    low: quotePrice(calculate: minimum)
                     volume: quoteAmount
+                    baseCurrency {
+                        symbol
+                    }
+                    quoteCurrency {
+                        symbol
+                    }
                 }
             }
         }
-        """ % (since, till, interval_minutes)
+        """
 
         headers = {
             'Content-Type': 'application/json',
@@ -150,7 +219,7 @@ class MLTrader:
 
         try:
             response = requests.post(base_url, json={'query': query}, headers=headers)
-            response.raise_for_status()  # Raise exception for non-200 status codes
+            response.raise_for_status()
 
             data = response.json()
 
@@ -159,13 +228,23 @@ class MLTrader:
 
                 if not dex_trades:
                     logger.warning("No trades found in the queried data.")
-                    return {}
+                    return pd.DataFrame()
 
-                return {'ethereum': {'dexTrades': dex_trades}}
+                df = pd.DataFrame(dex_trades)
+                return df[['v', 'vw', 'o', 'c', 'h', 'l', 'timeInterval', 'n']]
+
             else:
                 logger.error("Invalid query result format")
-                logger.error(data)  # Log the response for further inspection
-                return {}  # Return an empty dictionary when no trade volumes are found
+                logger.error(data)
+                return pd.DataFrame()
+
+        except requests.RequestException as e:
+            logger.error(f"Error fetching data: {str(e)}")
+            return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"An unexpected error occurred: {str(e)}")
+            return pd.DataFrame()
+
 
         except requests.RequestException as e:
             logger.error(f"Error fetching data: {str(e)}")
@@ -173,50 +252,110 @@ class MLTrader:
         except Exception as e:
             logger.error(f"An unexpected error occurred: {str(e)}")
             return {}
-        
+
     def predict(self, model, data):
-        logging.info(f"Input data: {data}")
-        prediction = model.predict(data)
-        logging.info(f"Output prediction: {prediction}")
-        return prediction
+        try:
+            # Check if required columns are present in the DataFrame
+            required_columns = ['v', 'vw', 'o', 'c', 'h', 'l', 't', 'n']
+            if not all(column in data.columns for column in required_columns):
+                raise ValueError(f"One or more required columns {required_columns} not found in the DataFrame.")
+            
+            # Extract relevant columns and convert to NumPy array
+            input_data = data[required_columns].values
+            logging.info(f"Input data: {input_data}")
+            
+            # Make prediction
+            prediction = model.predict(input_data)
+            
+            logging.info(f"Output prediction: {prediction}")
+            return prediction
+        
+        except Exception as e:
+            logger.error(f"Error during prediction: {e}")
+            return None
+
     
     def fetch_past_candle_data(self):
-        # Replace with your actual Bitquery API endpoint and parameters
-        url = "https://graphql.bitquery.io/"
+        base_url = 'https://graphql.bitquery.io/'
+        api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
+
         query = """
         {
             ethereum(network: bsc) {
                 dexTrades(
-                    options: {limit: 10, asc: "timeInterval.minute"}
-                    date: {since: "2021-09-01"}
+                    options: {limit: 1000, asc: "timeInterval.minute"}
+                    date: {since: "2021-01-01"}
                     exchangeName: {is: "Pancake v2"}
                     baseCurrency: {is: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"}
                     quoteCurrency: {is: "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82"}
                 ) {
-                    timeInterval {
-                        minute(count: 5)
+                    time: timeInterval {
+                        time
                     }
-                    tradeAmount(in: USD)
-                    tradeCount
+                    trades: count
+                    open: minimum(of: block, get: quote_price)
+                    close: maximum(of: block, get: quote_price)
+                    high: quotePrice(calculate: maximum)
+                    low: quotePrice(calculate: minimum)
+                    volume: quoteAmount
+                    baseCurrency {
+                        symbol
+                    }
+                    quoteCurrency {
+                        symbol
+                    }
                 }
             }
         }
+
         """
-        response = requests.post(url, json={'query': query})
-        data = response.json()
-        # Process the data to match the input format required by the model
-        df = pd.DataFrame(data)
-        return df
+
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'X-API-KEY': api_key
+        }
+
+        try:
+            
+            print("GraphQL Query:")
+            print(query)
+
+            response = requests.post(base_url, json={'query': query}, headers=headers)
+            response.raise_for_status()
+
+            data = response.json()
+
+            if 'data' in data and 'ethereum' in data['data'] and 'dexTrades' in data['data']['ethereum']:
+                dex_trades = data['data']['ethereum']['dexTrades']
+
+                if not dex_trades:
+                    logger.warning("No trades found in the queried data.")
+                    return pd.DataFrame()
+
+                df = pd.DataFrame(dex_trades)
+                return df[['v', 'vw', 'o', 'c', 'h', 'l', 'timeInterval', 'n', 'time']]
+
+            else:
+                logger.error("Invalid query result format")
+                logger.error(data)
+                return pd.DataFrame()
+
+        except requests.RequestException as e:
+            logger.error(f"Error fetching data: {str(e)}")
+            return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"An unexpected error occurred: {str(e)}")
+            return pd.DataFrame()
 
     def on_trading_iteration(self, model):
+        past_candle_data = self.fetch_past_candle_data()
 
-        data = self.fetch_past_candle_data()  # Modified here
-
-        prediction = self.predict(model, data)
+        prediction = self.predict(model, past_candle_data)
 
         try:
             self.train_models()
-            query_result = self.get_bitquery_current_candle()
+            query_result = self.get_bitquery_last_candle()
 
             if query_result is None:
                 logger.error("No query result obtained from API.")
@@ -252,14 +391,12 @@ class MLTrader:
                 logger.warning("Insufficient trade volumes for prediction.")
                 return
 
-            # Construct feature array X using trade data
             X = self.construct_feature_array(trade_prices, trade_volumes)
 
             if len(X) == 0:
                 logger.warning("Empty feature array X.")
                 return
 
-            # Make predictions using the trained models
             future_price_predictions = []
             for model in self.models:
                 future_price_prediction = model.predict(X)
@@ -267,10 +404,8 @@ class MLTrader:
 
             future_price_predictions = np.array(future_price_predictions)
 
-            # Use the average of predictions as the signal
             averaged_predictions = np.mean(future_price_predictions)
 
-            # Determine the action based on the prediction
             if averaged_predictions > vwap and self.current_position != 'long':
                 action = 'Buy'
             elif averaged_predictions < vwap and self.current_position == 'long':
@@ -278,50 +413,30 @@ class MLTrader:
             else:
                 action = 'Hold'
 
-            # Determine the side based on the action
             side = 'Buy' if action == 'Buy' else 'Sell'
 
-            # Print out the information
             print("Candle", CandleNumber)
             print("  Current Price:", vwap)
             print("  Predicted Price:", averaged_predictions)
             print("  Side:", side)
             print("  Action Taken:", 'Yes' if action != 'Hold' else 'No')
 
-            # Trading logic based on prediction
-            if averaged_predictions > vwap and self.current_position != 'long':  # Buy signal
-                self.buy_shares(self.symbol, 0.1)  # Buy 10% of available cash
+            if averaged_predictions > vwap and self.current_position != 'long':
+                self.buy_shares(self.symbol, 0.1)
                 logger.info("Predicted price (%f) is higher than VWAP (%f). Buying.", averaged_predictions, vwap)
-            elif averaged_predictions < vwap and self.current_position == 'long':  # Sell signal
+            elif averaged_predictions < vwap and self.current_position == 'long':
                 self.sell_all_shares(self.symbol)
                 logger.info("Predicted price (%f) is lower than VWAP (%f). Selling.", averaged_predictions, vwap)
 
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
 
-    
-    def set_random_seed(self):
-        seed_value = 123  # You can change this seed value
-        np.random.seed(seed_value)
-
-    def train_models(self):
-        X_train, y_train = self.load_data('crypto.csv')
-        if X_train is not None and y_train is not None:
-            idx = np.random.permutation(len(X_train))
-            X_train, y_train = X_train[idx], y_train[idx]
-            self.models = [SVR(kernel='rbf') for _ in range(len(self.models))]  # Create new models
-            for model in self.models:
-                model.fit(X_train, y_train)  # Fit the SVM model
-            logger.info("Training finished.")
-
-
     def construct_feature_array(self, trade_prices, trade_volumes):
         try:
             feature_array = []
 
-            # Assuming you want to use trade prices and volumes as features
             for price, volume in zip(trade_prices, trade_volumes):
-                feature_array.append([price, volume, 0, 0, 0, 0, 0])  # Adjust the features as needed
+                feature_array.append([price, volume, 0, 0, 0, 0, 0])
 
             if not feature_array:
                 logger.warning("Empty feature array constructed.")
@@ -336,8 +451,6 @@ class MLTrader:
 
 
     def get_past_candles(self, num_candles):
-        # Write your logic here to fetch past candles
-        # Return a list of dictionaries where each dictionary represents a candle
         return []
 
 if __name__ == "__main__":
@@ -346,6 +459,5 @@ if __name__ == "__main__":
 
     ml_trader = MLTrader(symbol='ETHUSD', api=alpaca_api)
 
-    # Choose a specific model to pass to the on_trading_iteration method
-    model_index = 0  # Choose the index of the model you want to use
-    ml_trader.on_trading_iteration(ml_trader.models[model_index])  # Pass the selected model
+    model_index = 0
+    ml_trader.on_trading_iteration(ml_trader.models[model_index])
