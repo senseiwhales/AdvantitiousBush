@@ -6,7 +6,7 @@ import requests
 import logging
 import alpaca_trade_api as tradeapi
 import datetime
-from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestRegressor
 
 CandleNumber = 1
 
@@ -23,7 +23,7 @@ class MLTrader:
         self.symbol = symbol
         self.api = api
         self.alpaca = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets', api_version='v2')
-        self.models = [DecisionTreeRegressor(max_depth=100, max_features=30) for _ in range(10)]
+        self.models = [RandomForestRegressor(n_estimators=100, max_depth=100, max_features=30)]  # Change model initialization
         self.train_models()  # Train the models at initialization
         self.update_current_position()  # Update the current position at initialization
 
@@ -113,7 +113,7 @@ class MLTrader:
         now = datetime.datetime.utcnow()
         interval_minutes = 30
 
-        start_time = now - datetime.timedelta(minutes=interval_minutes * 30)
+        start_time = now - datetime.timedelta(minutes=interval_minutes * 1000)
         since = start_time.isoformat() + 'Z'
         till = now.isoformat() + 'Z'
 
