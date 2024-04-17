@@ -6,7 +6,7 @@ import requests
 import logging
 import alpaca_trade_api as tradeapi
 import datetime
-from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
 
 CandleNumber = 1
 
@@ -23,7 +23,7 @@ class MLTrader:
         self.symbol = symbol
         self.api = api
         self.alpaca = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets', api_version='v2')
-        self.models = [RandomForestRegressor(n_estimators=100, max_depth=100, max_features=30)]  # Change model initialization
+        self.models = [XGBRegressor(n_estimators=100, max_depth=5, learning_rate=0.1)]  # Initialize XGBoost model
         self.train_models()  # Train the models at initialization
         self.update_current_position()  # Update the current position at initialization
 
@@ -265,7 +265,7 @@ class MLTrader:
             idx = np.random.permutation(len(X_train))
             X_train, y_train = X_train[idx], y_train[idx]
             for model in self.models:
-                model.fit(X_train, y_train)
+                model.fit(X_train, y_train, eval_metric='rmse')  # Adjusted to fit XGBoost's API
             logger.info("Training finished.")
 
 if __name__ == "__main__":
