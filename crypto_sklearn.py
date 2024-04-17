@@ -152,8 +152,6 @@ class MLTrader:
             logger.error(f"An unexpected error occurred: {str(e)}")
             return {}
 
-    
-
     def on_trading_iteration(self, iteration):
         try:
             logger.info(f"Current trading iteration: {iteration}")
@@ -208,7 +206,6 @@ class MLTrader:
             future_price_predictions = np.array(future_price_predictions)
             averaged_predictions = np.mean(future_price_predictions, axis=0)
 
-
             # Retrain the models after prediction
             X_train, y_train = self.load_data('crypto.csv')
             if X_train is not None and y_train is not None:
@@ -219,7 +216,6 @@ class MLTrader:
 
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
-
 
     def train_models(self):
         X_train, y_train = self.load_data('crypto.csv')
@@ -237,7 +233,7 @@ if __name__ == "__main__":
     ml_trader = MLTrader(symbol='ETHUSD', api=alpaca_api)
     iteration = 1
 
-    while iteration <= 10:
+    while iteration <= 3:
         ml_trader.on_trading_iteration(iteration)
         time.sleep(1)
         iteration += 1
@@ -248,7 +244,9 @@ if __name__ == "__main__":
     if X is not None:
         # Calculate and print the result for the next 30-minute candle after 10 iterations
         average_prediction = np.mean([model.predict(X) for model in ml_trader.models], axis=0)
-        logger.info("Average Prediction for the next 30-minute candle after 10 iterations: %s", average_prediction[0])
+        logger.info("Average Prediction for the next 30-minute candle after 3 iterations: %s", average_prediction[0])
+
+        # Log the current price of the coin
+        logger.info("Current price of the coin: %s", ml_trader.models[0].current_price)
     else:
         logger.error("Failed to load data for prediction.")
-
