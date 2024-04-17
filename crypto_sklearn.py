@@ -28,7 +28,6 @@ class MLTrader:
         self.set_random_seed()  # Add this line here
         self.train_models()  # Train the models at initialization
 
-
     def update_current_position(self):
         try:
             position = self.alpaca.get_position(self.symbol)
@@ -115,7 +114,7 @@ class MLTrader:
         now = datetime.datetime.utcnow()
         interval_minutes = 30
 
-        start_time = now - datetime.timedelta(minutes=interval_minutes * 100)
+        start_time = now - datetime.timedelta(minutes=(interval_minutes * 0))
         since = start_time.isoformat() + 'Z'
         till = now.isoformat() + 'Z'
 
@@ -174,8 +173,47 @@ class MLTrader:
         except Exception as e:
             logger.error(f"An unexpected error occurred: {str(e)}")
             return {}
+        
+    def predict(self, model, data):
+        logging.info(f"Input data: {data}")
+        prediction = model.predict(data)
+        logging.info(f"Output prediction: {prediction}")
+        return prediction
+    
+    def fetch_past_candle_data(self):
+        # Replace with your actual Bitquery API endpoint and parameters
+        url = "https://graphql.bitquery.io/"
+        query = """
+        {
+            ethereum(network: bsc) {
+                dexTrades(
+                    options: {limit: 10, asc: "timeInterval.minute"}
+                    date: {since: "2021-09-01"}
+                    exchangeName: {is: "Pancake v2"}
+                    baseCurrency: {is: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"}
+                    quoteCurrency: {is: "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82"}
+                ) {
+                    timeInterval {
+                        minute(count: 5)
+                    }
+                    tradeAmount(in: USD)
+                    tradeCount
+                }
+            }
+        }
+        """
+        response = requests.post(url, json={'query': query})
+        data = response.json()
+        # Process the data to match the input format required by the model
+        df = pd.DataFrame(data)
+        return df
 
-    def on_trading_iteration(self):
+    def on_trading_iteration(self, model):
+
+        data = self.fetch_past_candle_data()  # Modified here
+
+        prediction = self.predict(model, data)
+
         try:
             self.train_models()
             query_result = self.get_bitquery_current_candle()
@@ -214,8 +252,9 @@ class MLTrader:
                 logger.warning("Insufficient trade volumes for prediction.")
                 return
 
-            # Ensure the prediction data has the correct number of features
-            X = np.array([[trade_volume, vwap, 0, 0, 0, 0, 0] for trade_volume in trade_volumes])
+            # Construct feature array X using trade data
+            X = self.construct_feature_array(trade_prices, trade_volumes)
+
             if len(X) == 0:
                 logger.warning("Empty feature array X.")
                 return
@@ -259,6 +298,7 @@ class MLTrader:
 
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
+
     
     def set_random_seed(self):
         seed_value = 123  # You can change this seed value
@@ -269,9 +309,36 @@ class MLTrader:
         if X_train is not None and y_train is not None:
             idx = np.random.permutation(len(X_train))
             X_train, y_train = X_train[idx], y_train[idx]
+            self.models = [SVR(kernel='rbf') for _ in range(len(self.models))]  # Create new models
             for model in self.models:
                 model.fit(X_train, y_train)  # Fit the SVM model
             logger.info("Training finished.")
+
+
+    def construct_feature_array(self, trade_prices, trade_volumes):
+        try:
+            feature_array = []
+
+            # Assuming you want to use trade prices and volumes as features
+            for price, volume in zip(trade_prices, trade_volumes):
+                feature_array.append([price, volume, 0, 0, 0, 0, 0])  # Adjust the features as needed
+
+            if not feature_array:
+                logger.warning("Empty feature array constructed.")
+            else:
+                logger.info("Feature array constructed successfully.")
+
+            return np.array(feature_array)
+
+        except Exception as e:
+            logger.error(f"Error constructing feature array: {str(e)}")
+            return np.array([])
+
+
+    def get_past_candles(self, num_candles):
+        # Write your logic here to fetch past candles
+        # Return a list of dictionaries where each dictionary represents a candle
+        return []
 
 if __name__ == "__main__":
     symbol = 'ETHUSD'
@@ -279,8 +346,6 @@ if __name__ == "__main__":
 
     ml_trader = MLTrader(symbol='ETHUSD', api=alpaca_api)
 
-    # Loop to run every 30 minutes
-    while True:
-        ml_trader.on_trading_iteration()
-        CandleNumber += 1
-        time.sleep(10)  # Sleep for 30 minutes
+    # Choose a specific model to pass to the on_trading_iteration method
+    model_index = 0  # Choose the index of the model you want to use
+    ml_trader.on_trading_iteration(ml_trader.models[model_index])  # Pass the selected model
