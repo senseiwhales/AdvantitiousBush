@@ -6,7 +6,7 @@ import datetime
 import pandas as pd
 from sklearn.svm import SVR
 
-CandleNumber = 1
+CandleNumber = 3  # Number of candles
 
 API_KEY = 'PKZYTDU16C4GW63TOV68'
 API_SECRET = 'si6tzwHML9ZS2BLd0IktHkC2K6KkaZdOAACn0JhR'
@@ -46,72 +46,6 @@ class MLTrader:
                 logger.info(f"{model.__class__.__name__} trained successfully.")
             except Exception as e:
                 logger.error(f"Error training {model.__class__.__name__}: {str(e)}")
-
-    def get_bitquery_last_candle(self):
-        base_url = 'https://graphql.bitquery.io/'
-        api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
-
-        query = """
-        {
-            ethereum(network: bsc) {
-                dexTrades(
-                    options: {limit: 1, desc: "timeInterval.minute"}
-                    date: {since: "2021-01-01"}
-                    exchangeName: {is: "Pancake v2"}
-                    baseCurrency: {is: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"}
-                    quoteCurrency: {is: "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82"}
-                ) {
-                    timeInterval {
-                        minute(count: 1)
-                    }
-                    trades: count
-                    open: minimum(of: block, get: quote_price)
-                    close: maximum(of: block, get: quote_price)
-                    high: quotePrice(calculate: maximum)
-                    low: quotePrice(calculate: minimum)
-                    volume: quoteAmount
-                    baseCurrency {
-                        symbol
-                    }
-                    quoteCurrency {
-                        symbol
-                    }
-                }
-            }
-        }
-        """
-
-        headers = {
-            'Content-Type': 'application/json',
-            'X-API-KEY': api_key
-        }
-
-        try:
-            response = requests.post(base_url, json={'query': query}, headers=headers)
-            response.raise_for_status()
-
-            data = response.json()
-
-            if 'data' in data and 'ethereum' in data['data'] and 'dexTrades' in data['data']['ethereum']:
-                dex_trades = data['data']['ethereum']['dexTrades']
-
-                if not dex_trades:
-                    logger.warning("No trades found in the queried data.")
-                    return None
-
-                return dex_trades[0]  # Return the latest candle data
-
-            else:
-                logger.error("Invalid query result format")
-                logger.error(data)
-                return None
-
-        except requests.RequestException as e:
-            logger.error(f"Error fetching data: {str(e)}")
-            return None
-        except Exception as e:
-            logger.error(f"An unexpected error occurred: {str(e)}")
-            return None
 
     def set_random_seed(self):
         np.random.seed(123)  # Set the random seed to a fixed value
@@ -166,10 +100,15 @@ class MLTrader:
     def load_data(self, filename):
         try:
             data = pd.read_csv(filename)
-            data.columns = ['v', 'vw', 'o', 'c', 'h', 'l', 't', 'n']
-
+            expected_columns = ['v', 'vw', 'o', 'c', 'h', 'l']  # Expected columns
+            if not all(column in data.columns for column in expected_columns):
+                raise ValueError(f"One or more expected columns {expected_columns} not found in the DataFrame.")
+            
+            # Drop unused columns 't' and 'n'
+            data = data[expected_columns]
+            
             y = data['c']
-            X = data.values[:, :-1]
+            X = data.drop(columns=['c'])  # Drop the target column
             return X, y
         except FileNotFoundError:
             logger.error(f"Data file '{filename}' not found.")
@@ -178,38 +117,44 @@ class MLTrader:
             logger.error(f"An unexpected error occurred while loading data: {str(e)}")
             return None, None
 
+
     def fetch_past_candle_data(self):
         base_url = 'https://graphql.bitquery.io/'
         api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
 
-        query = """
-        {
-            ethereum(network: bsc) {
+        # Calculate start date based on CandleNumber
+        interval_minutes = 5  # Assuming each candle is 5 minutes
+        start_date = datetime.datetime.now() - datetime.timedelta(minutes=CandleNumber * interval_minutes)
+        start_date_str = start_date.strftime("%Y-%m-%d %H:%M:%S")
+
+        query = f"""
+        {{
+            ethereum(network: bsc) {{
                 dexTrades(
-                    options: {limit: 1000, asc: "timeInterval.minute"}
-                    date: {since: "2021-01-01"}
-                    exchangeName: {is: "Pancake v2"}
-                    baseCurrency: {is: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"}
-                    quoteCurrency: {is: "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82"}
-                ) {
-                    timeInterval {
+                    options: {{limit: {CandleNumber}, asc: "timeInterval.minute"}}
+                    date: {{since: "{start_date_str}"}}
+                    exchangeName: {{is: "Pancake v2"}}
+                    baseCurrency: {{is: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"}}
+                    quoteCurrency: {{is: "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82"}}
+                ) {{
+                    timeInterval {{
                         minute(count: 5)
-                    }
+                    }}
                     trades: count
                     open: minimum(of: block, get: quote_price)
                     close: maximum(of: block, get: quote_price)
                     high: quotePrice(calculate: maximum)
                     low: quotePrice(calculate: minimum)
                     volume: quoteAmount
-                    baseCurrency {
+                    baseCurrency {{
                         symbol
-                    }
-                    quoteCurrency {
+                    }}
+                    quoteCurrency {{
                         symbol
-                    }
-                }
-            }
-        }
+                    }}
+                }}
+            }}
+        }}
         """
 
         headers = {
@@ -231,7 +176,7 @@ class MLTrader:
                     return pd.DataFrame()
 
                 df = pd.DataFrame(dex_trades)
-                return df[['v', 'vw', 'o', 'c', 'h', 'l', 'timeInterval', 'n']]
+                return df[['v', 'vw', 'o', 'c', 'h', 'l']]  # Ensure column names match
 
             else:
                 logger.error("Invalid query result format")
@@ -246,17 +191,10 @@ class MLTrader:
             return pd.DataFrame()
 
 
-        except requests.RequestException as e:
-            logger.error(f"Error fetching data: {str(e)}")
-            return {}
-        except Exception as e:
-            logger.error(f"An unexpected error occurred: {str(e)}")
-            return {}
-
     def predict(self, model, data):
         try:
             # Check if required columns are present in the DataFrame
-            required_columns = ['v', 'vw', 'o', 'c', 'h', 'l', 't', 'n']
+            required_columns = ['v', 'vw', 'o', 'c', 'h', 'l']
             if not all(column in data.columns for column in required_columns):
                 raise ValueError(f"One or more required columns {required_columns} not found in the DataFrame.")
             
@@ -275,108 +213,21 @@ class MLTrader:
             return None
 
     
-    def fetch_past_candle_data(self):
-        base_url = 'https://graphql.bitquery.io/'
-        api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
-
-        query = """
-        {
-            ethereum(network: bsc) {
-                dexTrades(
-                    options: {limit: 1000, asc: "timeInterval.minute"}
-                    date: {since: "2021-01-01"}
-                    exchangeName: {is: "Pancake v2"}
-                    baseCurrency: {is: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"}
-                    quoteCurrency: {is: "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82"}
-                ) {
-                    time: timeInterval {
-                        time
-                    }
-                    trades: count
-                    open: minimum(of: block, get: quote_price)
-                    close: maximum(of: block, get: quote_price)
-                    high: quotePrice(calculate: maximum)
-                    low: quotePrice(calculate: minimum)
-                    volume: quoteAmount
-                    baseCurrency {
-                        symbol
-                    }
-                    quoteCurrency {
-                        symbol
-                    }
-                }
-            }
-        }
-
-        """
-
-        
-        headers = {
-            'Content-Type': 'application/json',
-            'X-API-KEY': api_key
-        }
-
-        try:
-            
-            print("GraphQL Query:")
-            print(query)
-
-            response = requests.post(base_url, json={'query': query}, headers=headers)
-            response.raise_for_status()
-
-            data = response.json()
-
-            if 'data' in data and 'ethereum' in data['data'] and 'dexTrades' in data['data']['ethereum']:
-                dex_trades = data['data']['ethereum']['dexTrades']
-
-                if not dex_trades:
-                    logger.warning("No trades found in the queried data.")
-                    return pd.DataFrame()
-
-                df = pd.DataFrame(dex_trades)
-                return df[['v', 'vw', 'o', 'c', 'h', 'l', 'timeInterval', 'n', 'time']]
-
-            else:
-                logger.error("Invalid query result format")
-                logger.error(data)
-                return pd.DataFrame()
-
-        except requests.RequestException as e:
-            logger.error(f"Error fetching data: {str(e)}")
-            return pd.DataFrame()
-        except Exception as e:
-            logger.error(f"An unexpected error occurred: {str(e)}")
-            return pd.DataFrame()
-
     def on_trading_iteration(self, model):
-        past_candle_data = self.fetch_past_candle_data()
+        past_candle_data = self.fetch_past_candle_data()  # Fetch past candle data
 
         prediction = self.predict(model, past_candle_data)
 
         try:
             self.train_models()
-            query_result = self.get_bitquery_last_candle()
 
-            if query_result is None:
-                logger.error("No query result obtained from API.")
+            # Use past candle data directly
+            if past_candle_data.empty:
+                logger.error("No past candle data available.")
                 return
 
-            if 'ethereum' not in query_result or 'dexTrades' not in query_result['ethereum']:
-                logger.error("Invalid query result format")
-                return
-
-            trades = query_result['ethereum']['dexTrades']
-
-            if not trades:
-                logger.warning("No trades found in the queried data.")
-                return
-
-            trade_prices = []
-            trade_volumes = []
-
-            for trade in trades:
-                trade_prices.append(trade['quotePrice'])
-                trade_volumes.append(trade['volume'])
+            trade_prices = past_candle_data['c'].tolist()  # Assuming 'c' is the column containing closing prices
+            trade_volumes = past_candle_data['v'].tolist()  # Assuming 'v' is the column containing volumes
 
             if not trade_volumes:
                 logger.warning("No trade volumes found.")
@@ -431,12 +282,13 @@ class MLTrader:
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
 
+
     def construct_feature_array(self, trade_prices, trade_volumes):
         try:
             feature_array = []
 
             for price, volume in zip(trade_prices, trade_volumes):
-                feature_array.append([price, volume, 0, 0, 0, 0, 0])
+                feature_array.append([price, volume, 0, 0, 0, 0])
 
             if not feature_array:
                 logger.warning("Empty feature array constructed.")
@@ -449,9 +301,6 @@ class MLTrader:
             logger.error(f"Error constructing feature array: {str(e)}")
             return np.array([])
 
-
-    def get_past_candles(self, num_candles):
-        return []
 
 if __name__ == "__main__":
     symbol = 'ETHUSD'
