@@ -29,6 +29,7 @@ class MLTrader:
         self.train_models()  # Train the models at initialization
 
 
+
     def update_current_position(self):
         try:
             position = self.alpaca.get_position(self.symbol)
@@ -46,8 +47,9 @@ class MLTrader:
         try:
             account = self.alpaca.get_account()
             cash_available = float(account.cash)
-            if self.models[0].current_price is not None:
-                num_shares = cash_available / self.models[0].current_price
+            current_price = self.get_current_price_from_tradingview()
+            if current_price is not None:
+                num_shares = cash_available / current_price
                 num_shares *= prediction_amount
             else:
                 num_shares = 0
@@ -175,10 +177,38 @@ class MLTrader:
             logger.error(f"An unexpected error occurred: {str(e)}")
             return {}
 
+    def get_current_price_from_tradingview(self):
+        try:
+            response = requests.get(TRADINGVIEW_API_URL)
+            response.raise_for_status()  # Raise exception for non-200 status codes
+
+            data = response.json()
+
+            if 'price' in data:
+                return float(data['price'])
+            else:
+                logger.error("Invalid response format from TradingView API.")
+                return None
+
+        except requests.RequestException as e:
+            logger.error(f"Error fetching data from TradingView API: {str(e)}")
+            return None
+        except Exception as e:
+            logger.error(f"An unexpected error occurred: {str(e)}")
+            return None
 
     def on_trading_iteration(self):
         try:
             self.train_models()
+            current_price = self.get_current_price_from_tradingview()
+
+            if current_price is None:
+                logger.error("Failed to get current price from TradingView API.")
+                return
+
+            for model in self.models:
+                model.current_price = current_price
+                
             query_result = self.get_bitquery_current_candle()
 
             if query_result is None:
