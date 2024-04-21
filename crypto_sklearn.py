@@ -25,6 +25,7 @@ class MLTrader:
         self.alpaca = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets', api_version='v2')
         self.models = [SVR(kernel='rbf')]  # Initialize SVM model with radial basis function kernel
         self.current_position = 'flat'  # Initialize current_position attribute
+        self.set_random_seed()  # Set random seed
         self.train_models()  # Train the models at initialization
 
     def update_current_position(self):
@@ -324,6 +325,10 @@ class MLTrader:
             for model in self.models:
                 model.fit(X_train, y_train)  # Fit the SVM model
             logger.info("Training finished.")
+
+    def set_random_seed(self):
+        seed_value = 123  # You can change this seed value
+        np.random.seed(seed_value)
 
 if __name__ == "__main__":
     symbol = 'ETHUSD'
