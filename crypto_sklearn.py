@@ -113,7 +113,7 @@ class MLTrader:
         api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
 
         now = datetime.datetime.utcnow()
-        interval_minutes = 30
+        interval_minutes = 1  # Change interval to 1 minute
 
         start_time = now - datetime.timedelta(minutes=interval_minutes * 100)
         since = start_time.isoformat() + 'Z'
@@ -174,6 +174,7 @@ class MLTrader:
         except Exception as e:
             logger.error(f"An unexpected error occurred: {str(e)}")
             return {}
+
 
     def on_trading_iteration(self):
         try:
@@ -265,7 +266,40 @@ class MLTrader:
         np.random.seed(seed_value)
 
     def train_models(self):
-        X_train, y_train = self.load_data('crypto.csv')
+        # Get the most recent data
+        query_result = self.get_bitquery_current_candle()
+
+        if query_result is None:
+            logger.error("No query result obtained from API.")
+            return
+
+        if 'ethereum' not in query_result or 'dexTrades' not in query_result['ethereum']:
+            logger.error("Invalid query result format")
+            return
+
+        trades = query_result['ethereum']['dexTrades']
+
+        if not trades:
+            logger.warning("No trades found in the queried data.")
+            return
+
+        trade_prices = []
+        trade_volumes = []
+
+        for trade in trades:
+            trade_prices.append(trade['quotePrice'])
+            trade_volumes.append(trade['volume'])
+
+        if not trade_volumes:
+            logger.warning("No trade volumes found.")
+            return
+
+        vwap = np.average(trade_prices, weights=trade_volumes)
+
+        # Prepare the training data
+        X_train = np.array([[trade_volume, vwap, 0, 0, 0, 0, 0] for trade_volume in trade_volumes])
+        y_train = np.array(trade_prices)
+
         if X_train is not None and y_train is not None:
             idx = np.random.permutation(len(X_train))
             X_train, y_train = X_train[idx], y_train[idx]
