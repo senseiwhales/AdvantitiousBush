@@ -26,6 +26,7 @@ class MLTrader:
         self.models = [SVR(kernel='rbf')]  # Initialize SVM model with radial basis function kernel
         self.current_position = 'flat'  # Initialize current_position attribute
         self.set_random_seed()  # Set random seed
+        self.last_trained_time = None
         self.train_models()  # Train the models at initialization
 
     def update_current_position(self):
@@ -113,9 +114,9 @@ class MLTrader:
         api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
 
         now = datetime.datetime.utcnow()
-        interval_minutes = 30  # Change interval to 1 minute
+        interval_minutes = 1  # Request 1-minute candles
 
-        start_time = now - datetime.timedelta(minutes=interval_minutes * 100)
+        start_time = now - datetime.timedelta(minutes=interval_minutes)
         since = start_time.isoformat() + 'Z'
         till = now.isoformat() + 'Z'
 
@@ -123,7 +124,7 @@ class MLTrader:
         query {
             ethereum(network: bsc) {
                 dexTrades(
-                    options: { limit: 30, desc: "timeInterval.minute" }
+                    options: { limit: 1, desc: "timeInterval.minute" }
                     date: { since: "%s", till: "%s" }
                     exchangeName: { in: ["Pancake"] }
                     baseCurrency: {is: "0x2170ed0880ac9a755fd29b2688956bd959f933f8"}
@@ -200,7 +201,11 @@ class MLTrader:
 
     def on_trading_iteration(self):
         try:
-            self.train_models()
+            current_time = datetime.datetime.now()
+            if self.last_trained_time is None or (current_time - self.last_trained_time).total_seconds() >= 3600:
+                self.train_models()
+                self.last_trained_time = current_time
+
             query_result = self.get_bitquery_current_candle()
             current_vwap = self.get_current_vwap_from_coingecko()
 
@@ -225,18 +230,10 @@ class MLTrader:
                 trade_prices.append(trade['quotePrice'])
                 trade_volumes.append(trade['volume'])
 
-            if not trade_volumes:
-                logger.warning("No trade volumes found.")
-                return
-
             vwap = np.average(trade_prices, weights=trade_volumes)
 
             for model in self.models:
                 model.current_vwap = vwap
-
-            if len(trade_volumes) < 4:
-                logger.warning("Insufficient trade volumes for prediction.")
-                return
 
             # Ensure the prediction data has the correct number of features
             X = np.array([[trade_volume, vwap, 0, 0, 0, 0, 0] for trade_volume in trade_volumes])
@@ -275,7 +272,7 @@ class MLTrader:
 
             # Trading logic based on prediction
             if action == 'Buy':
-                self.buy_shares(self.symbol, 0.1)  # Buy 10% of available cash
+                self.buy_shares(self.symbol, 0.3)  # Buy 10% of available cash
                 logger.info("Predicted price (%f) is higher than Current Price (%f). Buying.", averaged_predictions, current_vwap)
             elif action == 'Sell':
                 self.sell_all_shares(self.symbol)
@@ -283,6 +280,7 @@ class MLTrader:
 
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
+
 
     def train_models(self):
         # Get the most recent data
@@ -340,4 +338,4 @@ if __name__ == "__main__":
     while True:
         ml_trader.on_trading_iteration()
         CandleNumber += 1
-        time.sleep(10)  # Sleep for 30 minutes
+        time.sleep(1800)  # Sleep for 30 minutes
