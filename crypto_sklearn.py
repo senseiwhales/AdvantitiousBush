@@ -25,7 +25,9 @@ class MLTrader:
         self.alpaca = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets', api_version='v2')
         self.models = [SVR(kernel='rbf')]  # Initialize SVM model with radial basis function kernel
         self.current_position = 'flat'  # Initialize current_position attribute
+        self.set_random_seed()  # Add this line here
         self.train_models()  # Train the models at initialization
+
 
     def update_current_position(self):
         try:
@@ -44,9 +46,8 @@ class MLTrader:
         try:
             account = self.alpaca.get_account()
             cash_available = float(account.cash)
-            current_vwap = self.get_current_vwap_from_coingecko()
-            if current_vwap is not None:
-                num_shares = cash_available / current_vwap
+            if self.models[0].current_price is not None:
+                num_shares = cash_available / self.models[0].current_price
                 num_shares *= prediction_amount
             else:
                 num_shares = 0
@@ -112,7 +113,7 @@ class MLTrader:
         api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
 
         now = datetime.datetime.utcnow()
-        interval_minutes = 30  # Change interval to 1 minute
+        interval_minutes = 1  # Change interval to 1 minute
 
         start_time = now - datetime.timedelta(minutes=interval_minutes * 100)
         since = start_time.isoformat() + 'Z'
@@ -174,34 +175,11 @@ class MLTrader:
             logger.error(f"An unexpected error occurred: {str(e)}")
             return {}
 
-    def get_current_vwap_from_coingecko(self):
-        try:
-            # Fetch historical trading volume and prices from CoinGecko API
-            response = requests.get('https://api.coingecko.com/api/v3/coins/ethereum/market_chart?vs_currency=usd&days=1')
-            response.raise_for_status()  # Raise exception for non-200 status codes
-
-            data = response.json()
-
-            # Extract volumes and prices from the response
-            volumes = [entry[1] for entry in data['total_volumes']]
-            prices = [entry[1] for entry in data['prices']]
-
-            # Calculate VWAP (Volume Weighted Average Price)
-            vwap = sum(p * v for p, v in zip(prices, volumes)) / sum(volumes)
-            return vwap
-
-        except requests.RequestException as e:
-            logger.error(f"Error fetching data from CoinGecko API: {str(e)}")
-            return None
-        except Exception as e:
-            logger.error(f"An unexpected error occurred: {str(e)}")
-            return None
 
     def on_trading_iteration(self):
         try:
             self.train_models()
             query_result = self.get_bitquery_current_candle()
-            current_vwap = self.get_current_vwap_from_coingecko()
 
             if query_result is None:
                 logger.error("No query result obtained from API.")
@@ -231,7 +209,7 @@ class MLTrader:
             vwap = np.average(trade_prices, weights=trade_volumes)
 
             for model in self.models:
-                model.current_vwap = vwap
+                model.current_price = vwap
 
             if len(trade_volumes) < 4:
                 logger.warning("Insufficient trade volumes for prediction.")
@@ -254,10 +232,10 @@ class MLTrader:
             # Use the average of predictions as the signal
             averaged_predictions = np.mean(future_price_predictions)
 
-            # Determine the action based on the prediction and current price
-            if averaged_predictions > current_vwap and self.current_position != 'long':
+            # Determine the action based on the prediction
+            if averaged_predictions > vwap and self.current_position != 'long':
                 action = 'Buy'
-            elif averaged_predictions < current_vwap and self.current_position == 'long':
+            elif averaged_predictions < vwap and self.current_position == 'long':
                 action = 'Sell'
             else:
                 action = 'Hold'
@@ -267,21 +245,25 @@ class MLTrader:
 
             # Print out the information
             print("Candle", CandleNumber)
-            print("  Current Price:", current_vwap)
+            print("  Current Price:", vwap)
             print("  Predicted Price:", averaged_predictions)
             print("  Side:", side)
             print("  Action Taken:", 'Yes' if action != 'Hold' else 'No')
 
             # Trading logic based on prediction
-            if action == 'Buy':
+            if averaged_predictions > vwap and self.current_position != 'long':  # Buy signal
                 self.buy_shares(self.symbol, 0.1)  # Buy 10% of available cash
-                logger.info("Predicted price (%f) is higher than Current Price (%f). Buying.", averaged_predictions, current_vwap)
-            elif action == 'Sell':
+                logger.info("Predicted price (%f) is higher than VWAP (%f). Buying.", averaged_predictions, vwap)
+            elif averaged_predictions < vwap and self.current_position == 'long':  # Sell signal
                 self.sell_all_shares(self.symbol)
-                logger.info("Predicted price (%f) is lower than Current Price (%f). Selling.", averaged_predictions, current_vwap)
+                logger.info("Predicted price (%f) is lower than VWAP (%f). Selling.", averaged_predictions, vwap)
 
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
+    
+    def set_random_seed(self):
+        seed_value = 123  # You can change this seed value
+        np.random.seed(seed_value)
 
     def train_models(self):
         # Get the most recent data
