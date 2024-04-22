@@ -338,4 +338,4 @@ if __name__ == "__main__":
     while True:
         ml_trader.on_trading_iteration()
         CandleNumber += 1
-        time.sleep(1800)  # Sleep for 30 minutes
+        time.sleep(5)  # Sleep for 30 minutes
