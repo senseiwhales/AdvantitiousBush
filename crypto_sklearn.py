@@ -4,11 +4,14 @@ import os
 import time
 import requests
 import logging
+import pickle  # Import pickle module for model serialization
 import alpaca_trade_api as tradeapi
 import datetime
 from sklearn.svm import SVR
+from sklearn.model_selection import train_test_split
 
 CandleNumber = 1
+train_models_flag = False  # Set to True to train models, False to load existing models
 
 API_KEY = 'PKZYTDU16C4GW63TOV68'
 API_SECRET = 'si6tzwHML9ZS2BLd0IktHkC2K6KkaZdOAACn0JhR'
@@ -28,7 +31,10 @@ class MLTrader:
         self.set_random_seed()  # Set random seed
         self.last_trained_time = None
         self.check_initial_position()  # Check initial position
-        self.train_models()  # Train the models at initialization
+        if train_models_flag:
+            self.train_models()  # Train the models at initialization
+        else:
+            self.load_trained_models()  # Load existing models
 
     def check_initial_position(self):
         try:
@@ -115,9 +121,10 @@ class MLTrader:
         api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
 
         now = datetime.datetime.utcnow()
-        interval_minutes = 1  # Request 1-minute candles
+        interval_minutes = 30  # Request 1-minute candles
+        num_candles = 100  # Number of candles to fetch
 
-        start_time = now - datetime.timedelta(minutes=interval_minutes)
+        start_time = now - datetime.timedelta(minutes=interval_minutes * num_candles)
         since = start_time.isoformat() + 'Z'
         till = now.isoformat() + 'Z'
 
@@ -125,7 +132,7 @@ class MLTrader:
         query {
             ethereum(network: bsc) {
                 dexTrades(
-                    options: { limit: 1, desc: "timeInterval.minute" }
+                    options: { desc: "timeInterval.minute" }
                     date: { since: "%s", till: "%s" }
                     exchangeName: { in: ["Pancake"] }
                     baseCurrency: {is: "0x2170ed0880ac9a755fd29b2688956bd959f933f8"}
@@ -144,7 +151,7 @@ class MLTrader:
                 }
             }
         }
-        """ % (since, till, interval_minutes)
+        """ % (since, till, interval_minutes * num_candles)
 
         headers = {
             'Content-Type': 'application/json',
@@ -177,6 +184,7 @@ class MLTrader:
             logger.error(f"An unexpected error occurred: {str(e)}")
             return {}
 
+
     def get_current_vwap_from_coingecko(self):
         try:
             # Fetch historical trading volume and prices from CoinGecko API
@@ -201,19 +209,12 @@ class MLTrader:
             return None
         finally:
             # Add a delay of 1 second between requests
-            time.sleep(2)
-
+            time.sleep(5)
 
     def on_trading_iteration(self):
         try:
-            current_time = datetime.datetime.now()
-            if self.last_trained_time is None or (current_time - self.last_trained_time).total_seconds() >= 3600:
-                self.train_models()
-                self.last_trained_time = current_time
-
+            # Fetch previous 100 candles from Bitquery
             query_result = self.get_bitquery_current_candle()
-            current_vwap = self.get_current_vwap_from_coingecko()
-
             if query_result is None:
                 logger.error("No query result obtained from API.")
                 return
@@ -228,20 +229,17 @@ class MLTrader:
                 logger.warning("No trades found in the queried data.")
                 return
 
-            trade_prices = []
-            trade_volumes = []
+            # Extract trade prices and volumes
+            trade_prices = [trade['quotePrice'] for trade in trades]
+            trade_volumes = [trade['volume'] for trade in trades]
 
-            for trade in trades:
-                trade_prices.append(trade['quotePrice'])
-                trade_volumes.append(trade['volume'])
-
+            # Calculate VWAP for the last 100 candles
             vwap = np.average(trade_prices, weights=trade_volumes)
 
-            for model in self.models:
-                model.current_vwap = vwap
-
-            # Ensure the prediction data has the correct number of features
-            X = np.array([[trade_volume, vwap, 0, 0, 0, 0, 0] for trade_volume in trade_volumes])
+            # Prepare the prediction data
+            # Here, you can include additional candle data features alongside VWAP
+            X = np.array([[trade_volume, vwap, trade['open'], trade['close'], trade['high'], trade['low'], CandleNumber] for trade, trade_volume in zip(trades, trade_volumes)])
+            
             if len(X) == 0:
                 logger.warning("Empty feature array X.")
                 return
@@ -258,25 +256,13 @@ class MLTrader:
             averaged_predictions = np.mean(future_price_predictions)
 
             # Determine the action based on the prediction and current position
+            current_vwap = self.get_current_vwap_from_coingecko()
             if averaged_predictions > current_vwap:
-                if self.current_position == 'flat':
-                    action = 'Buy'
-                elif self.current_position == 'long':
-                    action = 'Hold'
+                action = 'Buy'
             elif averaged_predictions < current_vwap:
-                if self.current_position == 'flat':
-                    action = 'Buy'
-                elif self.current_position == 'long':
-                    action = 'Sell'
+                action = 'Sell'
             else:
                 action = 'Hold'
-
-            current_price = self.get_current_vwap_from_coingecko()
-
-            if current_price is None:
-                logger.error("Failed to retrieve current vwap from CoinGecko.")
-                return
-
 
             # Determine the side based on the action
             side = 'Buy' if action == 'Buy' else 'Sell'
@@ -299,49 +285,59 @@ class MLTrader:
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
 
-
-
     def train_models(self):
-        # Get the most recent data
-        query_result = self.get_bitquery_current_candle()
+        # Load historical data from the CSV file
+        X, y = self.load_data('crypto.csv')
 
-        if query_result is None:
-            logger.error("No query result obtained from API.")
+        if X is None or y is None:
+            logger.error("Failed to load data.")
             return
 
-        if 'ethereum' not in query_result or 'dexTrades' not in query_result['ethereum']:
-            logger.error("Invalid query result format")
+        if len(X) == 0 or len(y) == 0:
+            logger.warning("Empty data.")
             return
 
-        trades = query_result['ethereum']['dexTrades']
+        # Split the data into training and testing sets
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-        if not trades:
-            logger.warning("No trades found in the queried data.")
-            return
+        # Calculate weights based on risk
+        current_vwap = self.get_current_vwap_from_coingecko()
+        weights_train = np.abs(y_train - current_vwap)
+        max_weight = np.max(weights_train)
+        weights_train = max_weight / weights_train
 
-        trade_prices = []
-        trade_volumes = []
+        # Train the models with weighted samples
+        for model in self.models:
+            model.fit(X_train, y_train, sample_weight=weights_train)
 
-        for trade in trades:
-            trade_prices.append(trade['quotePrice'])
-            trade_volumes.append(trade['volume'])
+        # Evaluate the models on the test set
+        for i, model in enumerate(self.models):
+            score = model.score(X_test, y_test)
+            logger.info("Model %d Test Score: %.2f", i + 1, score)
 
-        if not trade_volumes:
-            logger.warning("No trade volumes found.")
-            return
+        logger.info("Training finished.")
 
-        vwap = np.average(trade_prices, weights=trade_volumes)
+        # Save the trained models to disk
+        self.save_trained_models()
 
-        # Prepare the training data
-        X_train = np.array([[trade_volume, vwap, 0, 0, 0, 0, 0] for trade_volume in trade_volumes])
-        y_train = np.array(trade_prices)
+    def save_trained_models(self):
+        try:
+            with open('trained_models.pkl', 'wb') as f:
+                pickle.dump(self.models, f)
+            logger.info("Trained models saved to disk.")
+        except Exception as e:
+            logger.error(f"Failed to save trained models: {str(e)}")
 
-        if X_train is not None and y_train is not None:
-            idx = np.random.permutation(len(X_train))
-            X_train, y_train = X_train[idx], y_train[idx]
-            for model in self.models:
-                model.fit(X_train, y_train)  # Fit the SVM model
-            logger.info("Training finished.")
+    def load_trained_models(self):
+        try:
+            with open('trained_models.pkl', 'rb') as f:
+                self.models = pickle.load(f)
+            logger.info("Trained models loaded from disk.")
+        except FileNotFoundError:
+            logger.warning("No trained models found on disk. Models will be trained from scratch.")
+            self.train_models()
+        except Exception as e:
+            logger.error(f"Failed to load trained models: {str(e)}")
 
     def set_random_seed(self):
         seed_value = 123  # You can change this seed value
