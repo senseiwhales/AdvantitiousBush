@@ -177,6 +177,9 @@ class MLTrader:
         except Exception as e:
             logger.error(f"An unexpected error occurred: {str(e)}")
             return None
+        
+        finally:
+            time.sleep(60)  # Add a 1-second delay to avoid rate limiting
 
     def on_trading_iteration(self):
         try:
@@ -300,7 +303,7 @@ class MLTrader:
             logger.info("Training finished.")
 
     def set_random_seed(self):
-        seed_value = 123  # You can change this seed value
+        seed_value = 143  # You can change this seed value
         np.random.seed(seed_value)
 
 if __name__ == "__main__":
@@ -313,4 +316,4 @@ if __name__ == "__main__":
     while True:
         ml_trader.on_trading_iteration()
         CandleNumber += 1
-        time.sleep(5)  # Sleep for 30 minutes
+        time.sleep(1800)  # Sleep for 30 minutes
