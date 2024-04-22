@@ -1,11 +1,9 @@
 import numpy as np
-import pandas as pd
-import os
-import time
-import requests
 import logging
-import alpaca_trade_api as tradeapi
+import requests
+import time
 import datetime
+import alpaca_trade_api as tradeapi
 from sklearn.svm import SVR
 
 CandleNumber = 1
@@ -89,25 +87,6 @@ class MLTrader:
             logger.error(f"Failed to sell all shares of {symbol}: {str(e)}")
         except Exception as e:
             logger.error(f"An unexpected error occurred: {str(e)}")
-
-    def load_data(self, filename):
-        try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            file_path = os.path.join(script_dir, filename)
-            data = pd.read_csv(file_path)
-            data.columns = ['v', 'vw', 'o', 'c', 'h', 'l', 't', 'n']
-
-            # Assuming the target variable is the closing price (can be modified based on your data)
-            y = data['c']  # Closing price represents future price
-
-            X = data.values[:, :-1]  # All columns except closing price for features
-            return X, y
-        except FileNotFoundError:
-            logger.error(f"Data file '{filename}' not found.")
-            return None, None
-        except Exception as e:
-            logger.error(f"An unexpected error occurred while loading data: {str(e)}")
-            return None, None
 
     def get_bitquery_current_candle(self):
         base_url = 'https://graphql.bitquery.io/'
@@ -202,9 +181,6 @@ class MLTrader:
     def on_trading_iteration(self):
         try:
             current_time = datetime.datetime.now()
-            if self.last_trained_time is None or (current_time - self.last_trained_time).total_seconds() >= 3600:
-                self.train_models()
-                self.last_trained_time = current_time
 
             query_result = self.get_bitquery_current_candle()
             current_vwap = self.get_current_vwap_from_coingecko()
@@ -281,9 +257,8 @@ class MLTrader:
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
 
-
     def train_models(self):
-        # Get the most recent data
+        # Fetch the most recent data for training
         query_result = self.get_bitquery_current_candle()
 
         if query_result is None:
