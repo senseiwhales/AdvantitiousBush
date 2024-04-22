@@ -27,9 +27,10 @@ class MLTrader:
         self.current_position = 'flat'  # Initialize current_position attribute
         self.set_random_seed()  # Set random seed
         self.last_trained_time = None
+        self.check_initial_position()  # Check initial position
         self.train_models()  # Train the models at initialization
 
-    def update_current_position(self):
+    def check_initial_position(self):
         try:
             position = self.alpaca.get_position(self.symbol)
             if position is not None:
@@ -198,6 +199,10 @@ class MLTrader:
         except Exception as e:
             logger.error(f"An unexpected error occurred: {str(e)}")
             return None
+        finally:
+            # Add a delay of 1 second between requests
+            time.sleep(2)
+
 
     def on_trading_iteration(self):
         try:
@@ -252,13 +257,26 @@ class MLTrader:
             # Use the average of predictions as the signal
             averaged_predictions = np.mean(future_price_predictions)
 
-            # Determine the action based on the prediction and current price
-            if averaged_predictions > current_vwap and self.current_position != 'long':
-                action = 'Buy'
-            elif averaged_predictions < current_vwap and self.current_position == 'long':
-                action = 'Sell'
+            # Determine the action based on the prediction and current position
+            if averaged_predictions > current_vwap:
+                if self.current_position == 'flat':
+                    action = 'Buy'
+                elif self.current_position == 'long':
+                    action = 'Hold'
+            elif averaged_predictions < current_vwap:
+                if self.current_position == 'flat':
+                    action = 'Buy'
+                elif self.current_position == 'long':
+                    action = 'Sell'
             else:
                 action = 'Hold'
+
+            current_price = self.get_current_vwap_from_coingecko()
+
+            if current_price is None:
+                logger.error("Failed to retrieve current vwap from CoinGecko.")
+                return
+
 
             # Determine the side based on the action
             side = 'Buy' if action == 'Buy' else 'Sell'
@@ -280,6 +298,7 @@ class MLTrader:
 
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
+
 
 
     def train_models(self):
