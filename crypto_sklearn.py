@@ -25,7 +25,6 @@ class MLTrader:
         self.current_position = 'flat'  # Initialize current_position attribute
         self.set_random_seed()  # Set random seed
         self.last_trained_time = None
-        self.train_models()  # Train the models at initialization
 
     def update_current_position(self):
         try:
@@ -169,6 +168,10 @@ class MLTrader:
 
             # Calculate VWAP (Volume Weighted Average Price)
             vwap = sum(p * v for p, v in zip(prices, volumes)) / sum(volumes)
+
+            # Introduce a delay of 30 seconds
+            time.sleep(30)
+
             return vwap
 
         except requests.RequestException as e:
@@ -177,9 +180,7 @@ class MLTrader:
         except Exception as e:
             logger.error(f"An unexpected error occurred: {str(e)}")
             return None
-        
-        finally:
-            time.sleep(60)  # Add a 1-second delay to avoid rate limiting
+
 
     def on_trading_iteration(self):
         try:
@@ -211,8 +212,15 @@ class MLTrader:
 
             vwap = np.average(trade_prices, weights=trade_volumes)
 
-            for model in self.models:
-                model.current_vwap = vwap
+            # Prepare the training data
+            X_train = np.array([[trade_volume, vwap, 0, 0, 0, 0, 0] for trade_volume in trade_volumes])
+            y_train = np.array(trade_prices)
+
+            if X_train is not None and y_train is not None:
+                idx = np.random.permutation(len(X_train))
+                X_train, y_train = X_train[idx], y_train[idx]
+                for model in self.models:
+                    model.fit(X_train, y_train)  # Fit the SVM model
 
             # Ensure the prediction data has the correct number of features
             X = np.array([[trade_volume, vwap, 0, 0, 0, 0, 0] for trade_volume in trade_volumes])
@@ -260,48 +268,6 @@ class MLTrader:
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
 
-    def train_models(self):
-        # Fetch the most recent data for training
-        query_result = self.get_bitquery_current_candle()
-
-        if query_result is None:
-            logger.error("No query result obtained from API.")
-            return
-
-        if 'ethereum' not in query_result or 'dexTrades' not in query_result['ethereum']:
-            logger.error("Invalid query result format")
-            return
-
-        trades = query_result['ethereum']['dexTrades']
-
-        if not trades:
-            logger.warning("No trades found in the queried data.")
-            return
-
-        trade_prices = []
-        trade_volumes = []
-
-        for trade in trades:
-            trade_prices.append(trade['quotePrice'])
-            trade_volumes.append(trade['volume'])
-
-        if not trade_volumes:
-            logger.warning("No trade volumes found.")
-            return
-
-        vwap = np.average(trade_prices, weights=trade_volumes)
-
-        # Prepare the training data
-        X_train = np.array([[trade_volume, vwap, 0, 0, 0, 0, 0] for trade_volume in trade_volumes])
-        y_train = np.array(trade_prices)
-
-        if X_train is not None and y_train is not None:
-            idx = np.random.permutation(len(X_train))
-            X_train, y_train = X_train[idx], y_train[idx]
-            for model in self.models:
-                model.fit(X_train, y_train)  # Fit the SVM model
-            logger.info("Training finished.")
-
     def set_random_seed(self):
         seed_value = 143  # You can change this seed value
         np.random.seed(seed_value)
@@ -312,8 +278,14 @@ if __name__ == "__main__":
 
     ml_trader = MLTrader(symbol='ETHUSD', api=alpaca_api)
 
-    # Loop to run every 30 minutes
+    # Loop to run every 60 seconds
     while True:
+        start_time = time.time()
+
+        # Check for trading opportunities every 60 seconds
         ml_trader.on_trading_iteration()
         CandleNumber += 1
-        time.sleep(1800)  # Sleep for 30 minutes
+
+        # Sleep for remaining time to complete 60 seconds
+        elapsed_time = time.time() - start_time
+        time.sleep(max(60 - elapsed_time, 0))
