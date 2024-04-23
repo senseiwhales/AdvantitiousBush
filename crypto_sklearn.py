@@ -87,73 +87,6 @@ class MLTrader:
         except Exception as e:
             logger.error(f"An unexpected error occurred: {str(e)}")
 
-    def get_bitquery_current_candle(self):
-        base_url = 'https://graphql.bitquery.io/'
-        api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
-
-        now = datetime.datetime.utcnow()
-        interval_minutes = 1  # Request 1-minute candles
-
-        start_time = now - datetime.timedelta(minutes=interval_minutes)
-        since = start_time.isoformat() + 'Z'
-        till = now.isoformat() + 'Z'
-
-        query = """
-        query {
-            ethereum(network: bsc) {
-                dexTrades(
-                    options: { limit: 1, desc: "timeInterval.minute" }
-                    date: { since: "%s", till: "%s" }
-                    exchangeName: { in: ["Pancake"] }
-                    baseCurrency: {is: "0x2170ed0880ac9a755fd29b2688956bd959f933f8"}
-                    quoteCurrency: {is: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"}
-                ) {
-                    timeInterval {
-                        minute(count: %d)
-                    }
-                    count
-                    quotePrice
-                    high: quotePrice(calculate: maximum)
-                    low: quotePrice(calculate: minimum)
-                    open: minimum(of: block, get: quote_price)
-                    close: maximum(of: block, get: quote_price)
-                    volume: quoteAmount
-                }
-            }
-        }
-        """ % (since, till, interval_minutes)
-
-        headers = {
-            'Content-Type': 'application/json',
-            'X-API-KEY': api_key
-        }
-
-        try:
-            response = requests.post(base_url, json={'query': query}, headers=headers)
-            response.raise_for_status()  # Raise exception for non-200 status codes
-
-            data = response.json()
-
-            if 'data' in data and 'ethereum' in data['data'] and 'dexTrades' in data['data']['ethereum']:
-                dex_trades = data['data']['ethereum']['dexTrades']
-
-                if not dex_trades:
-                    logger.warning("No trades found in the queried data.")
-                    return {}
-
-                return {'ethereum': {'dexTrades': dex_trades}}
-            else:
-                logger.error("Invalid query result format")
-                logger.error(data)  # Log the response for further inspection
-                return {}  # Return an empty dictionary when no trade volumes are found
-
-        except requests.RequestException as e:
-            logger.error(f"Error fetching data: {str(e)}")
-            return {}
-        except Exception as e:
-            logger.error(f"An unexpected error occurred: {str(e)}")
-            return {}
-
     def get_current_vwap_from_coingecko(self):
         try:
             # Fetch historical trading volume and prices from CoinGecko API
@@ -181,33 +114,116 @@ class MLTrader:
             logger.error(f"An unexpected error occurred: {str(e)}")
             return None
 
+    def get_bitquery_candles(self, limit=10):
+        base_url = 'https://graphql.bitquery.io/'
+        api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
+
+        now = datetime.datetime.utcnow()
+        total_candles = []
+
+        while len(total_candles) < limit:
+            start_time = now - datetime.timedelta(minutes=len(total_candles))
+            since = start_time.isoformat() + 'Z'
+            till = now.isoformat() + 'Z'
+
+            query = """
+            query {
+                ethereum(network: bsc) {
+                    dexTrades(
+                        options: { desc: "timeInterval.minute" }
+                        date: { since: "%s", till: "%s" }
+                        exchangeName: { in: ["Pancake"] }
+                        baseCurrency: {is: "0x2170ed0880ac9a755fd29b2688956bd959f933f8"}
+                        quoteCurrency: {is: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"}
+                    ) {
+                        timeInterval {
+                            minute(count: %d)
+                        }
+                        count
+                        quotePrice
+                        high: quotePrice(calculate: maximum)
+                        low: quotePrice(calculate: minimum)
+                        open: minimum(of: block, get: quote_price)
+                        close: maximum(of: block, get: quote_price)
+                        volume: quoteAmount
+                    }
+                }
+            }
+            """ % (since, till, min(limit - len(total_candles), 100))
+
+            headers = {
+                'Content-Type': 'application/json',
+                'X-API-KEY': api_key
+            }
+
+            try:
+                response = requests.post(base_url, json={'query': query}, headers=headers)
+                response.raise_for_status()  # Raise exception for non-200 status codes
+
+                data = response.json()
+
+                if 'data' in data and 'ethereum' in data['data'] and 'dexTrades' in data['data']['ethereum']:
+                    dex_trades = data['data']['ethereum']['dexTrades']
+
+                    if not dex_trades:
+                        logger.warning("No trades found in the queried data.")
+                        break
+
+                    total_candles.extend(dex_trades)
+
+                else:
+                    logger.error("Invalid query result format")
+                    logger.error(data)  # Log the response for further inspection
+                    break
+
+            except requests.RequestException as e:
+                logger.error(f"Error fetching data: {str(e)}")
+                break
+
+            except Exception as e:
+                logger.error(f"An unexpected error occurred: {str(e)}")
+                break
+
+        return total_candles[:limit]
+
+
+
+
     def on_trading_iteration(self):
         try:
             current_time = datetime.datetime.now()
 
-            # Fetch historical data for training
-            historical_data = self.get_bitquery_historical_data()
-            if historical_data is None:
-                logger.error("Failed to retrieve historical data from Bitquery.")
+            # Fetch current candle data from Bitquery
+            trades = self.get_bitquery_candles(limit=1000)
+
+            if not trades:
+                logger.warning("No trades found in the queried data.")
                 return
 
-            # Extract trade prices and volumes from historical data
             trade_prices = []
             trade_volumes = []
-            for trade in historical_data:
+            open_prices = []
+            close_prices = []
+            high_prices = []
+            low_prices = []
+
+            for trade in trades:
                 trade_prices.append(trade['quotePrice'])
                 trade_volumes.append(trade['volume'])
+                open_prices.append(float(trade['open']))  # Convert to float
+                close_prices.append(float(trade['close']))  # Convert to float
+                high_prices.append(float(trade['high']))  # Convert to float
+                low_prices.append(float(trade['low']))  # Convert to float
 
-            # Calculate VWAP (Volume Weighted Average Price) using historical data
             vwap = np.average(trade_prices, weights=trade_volumes)
 
-            # Update the training data with differences
-            open_close_diff = np.diff(np.array(trade_prices))
-            high_low_diff = np.diff(np.array(trade_prices))
+            # Calculate differences
+            open_close_diff = np.array(open_prices) - np.array(close_prices)
+            high_low_diff = np.array(high_prices) - np.array(low_prices)
 
             # Update the training data with differences
-            X_train = np.array([[trade_volume, vwap, open_close_diff[i], high_low_diff[i], trade_volumes[i], trade_prices[i], 0] for i, trade_volume in enumerate(trade_volumes)])
-            y_train = np.array(trade_prices[1:])  # Shifted by one to align with differences
+            X_train = np.array([[trade_volume, vwap, open_close_diff[i], high_low_diff[i], trade['volume'], trade['quotePrice']] for i, trade_volume in enumerate(trade_volumes)])
+            y_train = np.array(trade_prices)
 
             if X_train is not None and y_train is not None:
                 idx = np.random.permutation(len(X_train))
@@ -216,15 +232,15 @@ class MLTrader:
                     model.fit(X_train, y_train)  # Fit the SVM model
 
             # Update the prediction data with the latest data
-            X_predict = np.array([[trade_volumes[-1], vwap, open_close_diff[-1], high_low_diff[-1], trade_volumes[-1], trade_prices[-1], 0]])
-            if len(X_predict) == 0:
+            X = np.array([[trade_volume, vwap, open_close_diff[i], high_low_diff[i], trade['volume'], trade['quotePrice']] for i, trade_volume in enumerate(trade_volumes)])
+            if len(X) == 0:
                 logger.warning("Empty feature array X.")
                 return
 
             # Make predictions using the trained models
             future_price_predictions = []
             for model in self.models:
-                future_price_prediction = model.predict(X_predict)
+                future_price_prediction = model.predict(X)
                 future_price_predictions.append(future_price_prediction)
 
             future_price_predictions = np.array(future_price_predictions)
@@ -264,11 +280,10 @@ class MLTrader:
             logger.error(f"Error in trading iteration: {e}")
 
 
-
     def retrain_model(self):
         try:
             # Fetch the latest data
-            query_result = self.get_bitquery_current_candle()
+            query_result = self.get_bitquery_candles()
 
             if query_result is None:
                 logger.error("No query result obtained from API.")
@@ -317,8 +332,6 @@ class MLTrader:
 
         except Exception as e:
             logger.error(f"Error in model retraining: {e}")
-
-
 
     def set_random_seed(self):
         seed_value = 143  # You can change this seed value
