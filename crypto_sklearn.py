@@ -114,86 +114,79 @@ class MLTrader:
             logger.error(f"An unexpected error occurred: {str(e)}")
             return None
 
-    def get_bitquery_candles(self, limit=10):
+    def get_bitquery_candles(self, limit=100):
         base_url = 'https://graphql.bitquery.io/'
         api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
 
-        now = datetime.datetime.utcnow()
-        total_candles = []
+        end_time = datetime.datetime.utcnow()
+        start_time = end_time - datetime.timedelta(minutes=limit)
 
-        while len(total_candles) < limit:
-            start_time = now - datetime.timedelta(minutes=len(total_candles))
-            since = start_time.isoformat() + 'Z'
-            till = now.isoformat() + 'Z'
+        since = start_time.isoformat() + 'Z'
+        till = end_time.isoformat() + 'Z'
 
-            query = """
-            query {
-                ethereum(network: bsc) {
-                    dexTrades(
-                        options: { desc: "timeInterval.minute" }
-                        date: { since: "%s", till: "%s" }
-                        exchangeName: { in: ["Pancake"] }
-                        baseCurrency: {is: "0x2170ed0880ac9a755fd29b2688956bd959f933f8"}
-                        quoteCurrency: {is: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"}
-                    ) {
-                        timeInterval {
-                            minute(count: %d)
-                        }
-                        count
-                        quotePrice
-                        high: quotePrice(calculate: maximum)
-                        low: quotePrice(calculate: minimum)
-                        open: minimum(of: block, get: quote_price)
-                        close: maximum(of: block, get: quote_price)
-                        volume: quoteAmount
+        query = """
+        query {
+            ethereum(network: bsc) {
+                dexTrades(
+                    options: { desc: "timeInterval.minute" }
+                    date: { since: "%s", till: "%s" }
+                    exchangeName: { in: ["Pancake"] }
+                    baseCurrency: {is: "0x2170ed0880ac9a755fd29b2688956bd959f933f8"}
+                    quoteCurrency: {is: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"}
+                ) {
+                    timeInterval {
+                        minute
                     }
+                    count
+                    quotePrice
+                    high: quotePrice(calculate: maximum)
+                    low: quotePrice(calculate: minimum)
+                    open: minimum(of: block, get: quote_price)
+                    close: maximum(of: block, get: quote_price)
+                    volume: quoteAmount
                 }
             }
-            """ % (since, till, min(limit - len(total_candles), 100))
+        }
+        """ % (since, till)
 
-            headers = {
-                'Content-Type': 'application/json',
-                'X-API-KEY': api_key
-            }
+        headers = {
+            'Content-Type': 'application/json',
+            'X-API-KEY': api_key
+        }
 
-            try:
-                response = requests.post(base_url, json={'query': query}, headers=headers)
-                response.raise_for_status()  # Raise exception for non-200 status codes
+        try:
+            response = requests.post(base_url, json={'query': query}, headers=headers)
+            response.raise_for_status()  # Raise exception for non-200 status codes
 
-                data = response.json()
+            data = response.json()
 
-                if 'data' in data and 'ethereum' in data['data'] and 'dexTrades' in data['data']['ethereum']:
-                    dex_trades = data['data']['ethereum']['dexTrades']
+            if 'data' in data and 'ethereum' in data['data'] and 'dexTrades' in data['data']['ethereum']:
+                dex_trades = data['data']['ethereum']['dexTrades']
 
-                    if not dex_trades:
-                        logger.warning("No trades found in the queried data.")
-                        break
+                if not dex_trades:
+                    logger.warning("No trades found in the queried data.")
 
-                    total_candles.extend(dex_trades)
+                return dex_trades
 
-                else:
-                    logger.error("Invalid query result format")
-                    logger.error(data)  # Log the response for further inspection
-                    break
+            else:
+                logger.error("Invalid query result format")
+                logger.error(data)  # Log the response for further inspection
+                return []
 
-            except requests.RequestException as e:
-                logger.error(f"Error fetching data: {str(e)}")
-                break
+        except requests.RequestException as e:
+            logger.error(f"Error fetching data: {str(e)}")
+            return []
 
-            except Exception as e:
-                logger.error(f"An unexpected error occurred: {str(e)}")
-                break
-
-        return total_candles[:limit]
-
-
+        except Exception as e:
+            logger.error(f"An unexpected error occurred: {str(e)}")
+            return []
 
 
     def on_trading_iteration(self):
         try:
             current_time = datetime.datetime.now()
 
-            # Fetch current candle data from Bitquery
+            # Fetch historical candle data from Bitquery
             trades = self.get_bitquery_candles(limit=1000)
 
             if not trades:
@@ -225,78 +218,56 @@ class MLTrader:
             X_train = np.array([[trade_volume, vwap, open_close_diff[i], high_low_diff[i], trade['volume'], trade['quotePrice']] for i, trade_volume in enumerate(trade_volumes)])
             y_train = np.array(trade_prices)
 
-            if X_train is not None and y_train is not None:
+            if X_train.size > 0 and y_train.size > 0:  # Check if arrays are not empty
                 idx = np.random.permutation(len(X_train))
                 X_train, y_train = X_train[idx], y_train[idx]
                 for model in self.models:
                     model.fit(X_train, y_train)  # Fit the SVM model
 
-            # Update the prediction data with the latest data
+            # Make predictions using the trained models
             X = np.array([[trade_volume, vwap, open_close_diff[i], high_low_diff[i], trade['volume'], trade['quotePrice']] for i, trade_volume in enumerate(trade_volumes)])
             if len(X) == 0:
                 logger.warning("Empty feature array X.")
                 return
 
-            # Make predictions using the trained models
             future_price_predictions = []
             for model in self.models:
                 future_price_prediction = model.predict(X)
                 future_price_predictions.append(future_price_prediction)
 
             future_price_predictions = np.array(future_price_predictions)
+            print(future_price_predictions)
+            if len(future_price_predictions) < 31:
+                logger.warning("Insufficient data for predicting 30 candles from now.")
+                return
 
-            # Use the average of predictions as the signal
-            averaged_predictions = np.mean(future_price_predictions)
+            if self.current_position == 'flat':
+                # Check for the best time to enter a long position
+                if (future_price_predictions[:, 30] > vwap).any():
+                    self.buy_shares(self.symbol, 0.3)  # Buy 30% of available cash
+                    logger.info("Predicted price is higher than Current Price. Buying.")
+            elif self.current_position == 'long':
+                # Check for the best time to exit the long position
+                if (future_price_predictions[:, 30] < vwap).any():
+                    self.sell_all_shares(self.symbol)
+                    logger.info("Predicted price is lower than Current Price. Selling.")
 
-            # Determine the action based on the prediction and current price
-            if averaged_predictions > vwap and self.current_position != 'long':
-                action = 'Buy'
-            elif averaged_predictions < vwap and self.current_position == 'long':
-                action = 'Sell'
-            else:
-                action = 'Hold'
+            # Print the current iteration number
+            print("Current Iteration:", CandleNumber)
 
-            # Determine the side based on the action
-            side = 'Buy' if action == 'Buy' else 'Sell'
-
-            print("Candle", CandleNumber)
-            print("  Current Price:", vwap)
-            print("  Predicted Price:", averaged_predictions)
-            print("  Side:", side)
-            print("  Action Taken:", 'Yes' if action != 'Hold' else 'No')
-
-            # Trading logic based on prediction
-            if action == 'Buy':
-                self.buy_shares(self.symbol, 0.3)  # Buy 10% of available cash
-                logger.info("Predicted price (%f) is higher than Current Price (%f). Buying.", averaged_predictions, vwap)
-            elif action == 'Sell':
-                self.sell_all_shares(self.symbol)
-                logger.info("Predicted price (%f) is lower than Current Price (%f). Selling.", averaged_predictions, vwap)
-
-            # Retrain the model with the latest data
-            self.retrain_model()
+            # Print the prediction for 60 candles from now
+            print("Prediction for 30 candles from now:", future_price_predictions[:, 30])
 
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
 
-
-    def retrain_model(self):
+    def train_model(self):
         try:
-            # Fetch the latest data
-            query_result = self.get_bitquery_candles()
-
-            if query_result is None:
-                logger.error("No query result obtained from API.")
-                return
-
-            if 'ethereum' not in query_result or 'dexTrades' not in query_result['ethereum']:
-                logger.error("Invalid query result format")
-                return
-
-            trades = query_result['ethereum']['dexTrades']
+            # Fetch historical candle data from Bitquery
+            trades = self.get_bitquery_candles(limit=1000)
 
             if not trades:
-                logger.warning("No trades found in the queried data.")
+                logger.warning("No trades found in the queried data for training.")
                 return
 
             trade_prices = []
@@ -320,18 +291,19 @@ class MLTrader:
             open_close_diff = np.array(open_prices) - np.array(close_prices)
             high_low_diff = np.array(high_prices) - np.array(low_prices)
 
-            # Update the training data with the latest trades
-            X_train = np.array([[trade_volume, vwap, open_close_diff[i], high_low_diff[i], trade['volume'], trade['quotePrice'], 0] for i, trade_volume in enumerate(trade_volumes)])
+            # Prepare the training data
+            X_train = np.array([[trade_volume, vwap, open_close_diff[i], high_low_diff[i], trade['volume'], trade['quotePrice']] for i, trade_volume in enumerate(trade_volumes)])
             y_train = np.array(trade_prices)
 
-            if X_train is not None and y_train is not None:
+            if X_train.size > 0 and y_train.size > 0:  # Check if arrays are not empty
                 idx = np.random.permutation(len(X_train))
                 X_train, y_train = X_train[idx], y_train[idx]
                 for model in self.models:
                     model.fit(X_train, y_train)  # Fit the SVM model
+                logger.info("Model trained successfully.")
 
         except Exception as e:
-            logger.error(f"Error in model retraining: {e}")
+            logger.error(f"Error in training model: {e}")
 
     def set_random_seed(self):
         seed_value = 143  # You can change this seed value
@@ -343,12 +315,28 @@ if __name__ == "__main__":
 
     ml_trader = MLTrader(symbol='ETHUSD', api=alpaca_api)
 
+    # Training the model initially
+    ml_trader.train_model()
+
     # Loop to run every 60 seconds
     while True:
         start_time = time.time()
 
         # Check for trading opportunities every 60 seconds
-        ml_trader.on_trading_iteration()
+        try:
+            ml_trader.on_trading_iteration()
+        except Exception as e:
+            if '429' in str(e):
+                print("Rate limit exceeded. Sleeping for 60 seconds.")
+                time.sleep(60)
+            elif 'ambiguous' in str(e):
+                # Replace this with the actual line of code causing the error
+                ambiguous_array = np.array([True, False])
+                if ambiguous_array.any():  # or ambiguous_array.all(), depending on your logic
+                    pass  # Replace with your actual code
+            else:
+                raise e
+
         CandleNumber += 1
 
         # Sleep for remaining time to complete 60 seconds
