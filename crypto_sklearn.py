@@ -185,8 +185,90 @@ class MLTrader:
         try:
             current_time = datetime.datetime.now()
 
+            # Fetch historical data for training
+            historical_data = self.get_bitquery_historical_data()
+            if historical_data is None:
+                logger.error("Failed to retrieve historical data from Bitquery.")
+                return
+
+            # Extract trade prices and volumes from historical data
+            trade_prices = []
+            trade_volumes = []
+            for trade in historical_data:
+                trade_prices.append(trade['quotePrice'])
+                trade_volumes.append(trade['volume'])
+
+            # Calculate VWAP (Volume Weighted Average Price) using historical data
+            vwap = np.average(trade_prices, weights=trade_volumes)
+
+            # Update the training data with differences
+            open_close_diff = np.diff(np.array(trade_prices))
+            high_low_diff = np.diff(np.array(trade_prices))
+
+            # Update the training data with differences
+            X_train = np.array([[trade_volume, vwap, open_close_diff[i], high_low_diff[i], trade_volumes[i], trade_prices[i], 0] for i, trade_volume in enumerate(trade_volumes)])
+            y_train = np.array(trade_prices[1:])  # Shifted by one to align with differences
+
+            if X_train is not None and y_train is not None:
+                idx = np.random.permutation(len(X_train))
+                X_train, y_train = X_train[idx], y_train[idx]
+                for model in self.models:
+                    model.fit(X_train, y_train)  # Fit the SVM model
+
+            # Update the prediction data with the latest data
+            X_predict = np.array([[trade_volumes[-1], vwap, open_close_diff[-1], high_low_diff[-1], trade_volumes[-1], trade_prices[-1], 0]])
+            if len(X_predict) == 0:
+                logger.warning("Empty feature array X.")
+                return
+
+            # Make predictions using the trained models
+            future_price_predictions = []
+            for model in self.models:
+                future_price_prediction = model.predict(X_predict)
+                future_price_predictions.append(future_price_prediction)
+
+            future_price_predictions = np.array(future_price_predictions)
+
+            # Use the average of predictions as the signal
+            averaged_predictions = np.mean(future_price_predictions)
+
+            # Determine the action based on the prediction and current price
+            if averaged_predictions > vwap and self.current_position != 'long':
+                action = 'Buy'
+            elif averaged_predictions < vwap and self.current_position == 'long':
+                action = 'Sell'
+            else:
+                action = 'Hold'
+
+            # Determine the side based on the action
+            side = 'Buy' if action == 'Buy' else 'Sell'
+
+            print("Candle", CandleNumber)
+            print("  Current Price:", vwap)
+            print("  Predicted Price:", averaged_predictions)
+            print("  Side:", side)
+            print("  Action Taken:", 'Yes' if action != 'Hold' else 'No')
+
+            # Trading logic based on prediction
+            if action == 'Buy':
+                self.buy_shares(self.symbol, 0.3)  # Buy 10% of available cash
+                logger.info("Predicted price (%f) is higher than Current Price (%f). Buying.", averaged_predictions, vwap)
+            elif action == 'Sell':
+                self.sell_all_shares(self.symbol)
+                logger.info("Predicted price (%f) is lower than Current Price (%f). Selling.", averaged_predictions, vwap)
+
+            # Retrain the model with the latest data
+            self.retrain_model()
+
+        except Exception as e:
+            logger.error(f"Error in trading iteration: {e}")
+
+
+
+    def retrain_model(self):
+        try:
+            # Fetch the latest data
             query_result = self.get_bitquery_current_candle()
-            current_vwap = self.get_current_vwap_from_coingecko()
 
             if query_result is None:
                 logger.error("No query result obtained from API.")
@@ -223,7 +305,7 @@ class MLTrader:
             open_close_diff = np.array(open_prices) - np.array(close_prices)
             high_low_diff = np.array(high_prices) - np.array(low_prices)
 
-            # Update the training data with differences
+            # Update the training data with the latest trades
             X_train = np.array([[trade_volume, vwap, open_close_diff[i], high_low_diff[i], trade['volume'], trade['quotePrice'], 0] for i, trade_volume in enumerate(trade_volumes)])
             y_train = np.array(trade_prices)
 
@@ -233,53 +315,8 @@ class MLTrader:
                 for model in self.models:
                     model.fit(X_train, y_train)  # Fit the SVM model
 
-            # Update the prediction data with differences
-            X = np.array([[trade_volume, vwap, open_close_diff[i], high_low_diff[i], trade['volume'], trade['quotePrice'], 0] for i, trade_volume in enumerate(trade_volumes)])
-            if len(X) == 0:
-                logger.warning("Empty feature array X.")
-                return
-
-            # Make predictions using the trained models
-            future_price_predictions = []
-            for model in self.models:
-                future_price_prediction = model.predict(X)
-                future_price_predictions.append(future_price_prediction)
-
-            future_price_predictions = np.array(future_price_predictions)
-
-            # Use the average of predictions as the signal
-            averaged_predictions = np.mean(future_price_predictions)
-
-            # Determine the action based on the prediction and current price
-            if averaged_predictions > current_vwap and self.current_position != 'long':
-                action = 'Buy'
-            elif averaged_predictions < current_vwap and self.current_position == 'long':
-                action = 'Sell'
-            else:
-                action = 'Hold'
-
-            # Determine the side based on the action
-            side = 'Buy' if action == 'Buy' else 'Sell'
-
-            # Print out the information
-            print("Candle", CandleNumber)
-            print("  Current Price:", current_vwap)
-            print("  Predicted Price:", averaged_predictions)
-            print("  Side:", side)
-            print("  Action Taken:", 'Yes' if action != 'Hold' else 'No')
-
-            # Trading logic based on prediction
-            if action == 'Buy':
-                self.buy_shares(self.symbol, 0.3)  # Buy 10% of available cash
-                logger.info("Predicted price (%f) is higher than Current Price (%f). Buying.", averaged_predictions, current_vwap)
-            elif action == 'Sell':
-                self.sell_all_shares(self.symbol)
-                logger.info("Predicted price (%f) is lower than Current Price (%f). Selling.", averaged_predictions, current_vwap)
-
         except Exception as e:
-            logger.error(f"Error in trading iteration: {e}")
-
-
+            logger.error(f"Error in model retraining: {e}")
 
 
 
