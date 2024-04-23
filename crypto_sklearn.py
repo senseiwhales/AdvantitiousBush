@@ -181,7 +181,6 @@ class MLTrader:
             logger.error(f"An unexpected error occurred: {str(e)}")
             return None
 
-
     def on_trading_iteration(self):
         try:
             current_time = datetime.datetime.now()
@@ -205,15 +204,27 @@ class MLTrader:
 
             trade_prices = []
             trade_volumes = []
+            open_prices = []
+            close_prices = []
+            high_prices = []
+            low_prices = []
 
             for trade in trades:
                 trade_prices.append(trade['quotePrice'])
                 trade_volumes.append(trade['volume'])
+                open_prices.append(float(trade['open']))  # Convert to float
+                close_prices.append(float(trade['close']))  # Convert to float
+                high_prices.append(float(trade['high']))  # Convert to float
+                low_prices.append(float(trade['low']))  # Convert to float
 
             vwap = np.average(trade_prices, weights=trade_volumes)
 
-            # Prepare the training data
-            X_train = np.array([[trade_volume, vwap, 0, 0, 0, 0, 0] for trade_volume in trade_volumes])
+            # Calculate differences
+            open_close_diff = np.array(open_prices) - np.array(close_prices)
+            high_low_diff = np.array(high_prices) - np.array(low_prices)
+
+            # Update the training data with differences
+            X_train = np.array([[trade_volume, vwap, open_close_diff[i], high_low_diff[i], trade['volume'], trade['quotePrice'], 0] for i, trade_volume in enumerate(trade_volumes)])
             y_train = np.array(trade_prices)
 
             if X_train is not None and y_train is not None:
@@ -222,8 +233,8 @@ class MLTrader:
                 for model in self.models:
                     model.fit(X_train, y_train)  # Fit the SVM model
 
-            # Ensure the prediction data has the correct number of features
-            X = np.array([[trade_volume, vwap, 0, 0, 0, 0, 0] for trade_volume in trade_volumes])
+            # Update the prediction data with differences
+            X = np.array([[trade_volume, vwap, open_close_diff[i], high_low_diff[i], trade['volume'], trade['quotePrice'], 0] for i, trade_volume in enumerate(trade_volumes)])
             if len(X) == 0:
                 logger.warning("Empty feature array X.")
                 return
@@ -267,6 +278,10 @@ class MLTrader:
 
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
+
+
+
+
 
     def set_random_seed(self):
         seed_value = 143  # You can change this seed value
