@@ -117,7 +117,7 @@ class MLTrader:
                     exchangeName: { in: ["Pancake"] }
                     baseCurrency: {is: "0x2170ed0880ac9a755fd29b2688956bd959f933f8"}
                     quoteCurrency: {is: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"}
-                ) {
+                ) {res
                     volume
                     open
                     close
@@ -129,7 +129,6 @@ class MLTrader:
             }
         }
         """ % (since, till)
-
 
         headers = {
             'Content-Type': 'application/json',
