@@ -40,7 +40,7 @@ class MLTrader:
         try:
             account = self.alpaca.get_account()
             cash_available = float(account.cash)
-            current_price = self.get_current_price_from_bitquery()
+            current_price = self.get_current_price_from_coinmarketcap()
             if current_price is not None:
                 num_shares = cash_available / current_price
                 num_shares *= prediction_amount
@@ -84,87 +84,9 @@ class MLTrader:
         except Exception as e:
             logger.error(f"An unexpected error occurred: {str(e)}")
 
-    def get_current_price_from_bitquery(self):
-        try:
-            # Fetch current trading price from Bitquery
-            candles = self.get_bitquery_candles(limit=1)
-
-            if candles:
-                return candles[0]['close']
-            else:
-                logger.warning("No candles found in the queried data.")
-                return None
-        except Exception as e:
-            logger.error(f"Error fetching data from Bitquery: {str(e)}")
-            return None
-
-    def get_bitquery_candles(self, limit=1):
-        base_url = 'https://graphql.bitquery.io/'
-        api_key = 'BQYiC5GWXxGq6xj1umax4GRKkUyaLc64'
-
-        end_time = datetime.datetime.utcnow()
-        start_time = end_time - datetime.timedelta(minutes=limit)
-
-        since = start_time.isoformat() + 'Z'
-        till = end_time.isoformat() + 'Z'
-
-        query = """
-        query {
-            ethereum(network: bsc) {
-                dexTrades(
-                    options: { desc: "timeInterval.minute" }
-                    date: { since: "%s", till: "%s" }
-                    exchangeName: { in: ["Pancake"] }
-                    baseCurrency: {is: "0x2170ed0880ac9a755fd29b2688956bd959f933f8"}
-                    quoteCurrency: {is: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"}
-                ) {res
-                    volume
-                    open
-                    close
-                    high
-                    low
-                    timestamp
-                    numberOfTrades
-                }
-            }
-        }
-        """ % (since, till)
-
-        headers = {
-            'Content-Type': 'application/json',
-            'X-API-KEY': api_key
-        }
-
-        try:
-            response = requests.post(base_url, json={'query': query}, headers=headers)
-            response.raise_for_status()  # Raise exception for non-200 status codes
-
-            data = response.json()
-
-            if 'data' in data and 'ethereum' in data['data'] and 'dexTrades' in data['data']['ethereum']:
-                dex_trades = data['data']['ethereum']['dexTrades']
-
-                if not dex_trades:
-                    logger.warning("No candles found in the queried data.")
-
-                return dex_trades
-
-            else:
-                logger.error("Invalid query result format")
-                print(query)
-                return []
-
-        except requests.RequestException as e:
-            logger.error(f"Error fetching data: {str(e)}")
-            return []
-
-        except Exception as e:
-            logger.error(f"An unexpected error occurred: {str(e)}")
-            return []
-
     def on_trading_iteration(self):
         try:
-            current_price = self.get_current_price_from_bitquery()
+            current_price = self.get_current_price_from_coinmarketcap()
 
             if current_price is None:
                 logger.warning("No current price found.")
@@ -172,7 +94,7 @@ class MLTrader:
 
             print("Current Price:", current_price)
 
-            closing_prices = [float(candle['close']) for candle in self.get_bitquery_candles(limit=30)]
+            closing_prices = [float(candle['close']) for candle in self.get_coinmarketcap_candles(limit=30)]
 
             if self.current_position == 'flat':
                 # Check for the best time to enter a long position
@@ -187,6 +109,26 @@ class MLTrader:
 
         except Exception as e:
             logger.error(f"Error in trading iteration: {e}")
+
+    def get_current_price_from_coinmarketcap(self):
+        url = f'https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest'
+        parameters = {
+            'symbol': self.symbol,  # Ensure your symbol is supported by CoinMarketCap
+            'convert': 'USD'
+        }
+        headers = {
+            'Accepts': 'application/json',
+            'X-CMC_PRO_API_KEY': "bc376488-bdfa-41ca-9f19-309e9ef5d0fc",
+        }
+      
+        try:
+            response = requests.get(url, headers=headers, params=parameters)
+            response.raise_for_status()  # Raise exception for HTTP errors
+            data = response.json()
+            price = data['data'][self.symbol]['quote']['USD']['price']
+            return price
+        except requests.RequestException as e:
+            logger.error(f"Error fetching data from CoinMarketCap: {str(e)}")
 
     def predict_buy_signal(self, current_price, previous_closing_prices):
         # Calculate moving average
@@ -208,7 +150,34 @@ class MLTrader:
         else:
             return False
 
+    def backtest(self, start_date, end_date, initial_cash=10000):
+        """Simulate trading over a historical period."""
+        historical_data = self.load_historical_data('path/to/your/historical/data.csv')
+        historical_data = historical_data[start_date:end_date]
 
+        cash = initial_cash
+        shares = 0
+        portfolio_value = []
+
+        for date, row in historical_data.iterrows():
+            current_price = row['Close']
+            closing_prices = historical_data.loc[:date]['Close'][-30:]  # Last 30 days of closing prices
+
+            if shares == 0 and self.predict_buy_signal(current_price, closing_prices):
+                shares = cash / current_price
+                cash = 0
+                print(f"Buying on {date}: {shares} shares at {current_price}")
+            elif shares > 0 and self.predict_sell_signal(current_price, closing_prices):
+                cash = shares * current_price
+                shares = 0
+                print(f"Selling on {date}: All shares at {current_price}")
+
+            portfolio_value.append(cash + (shares * current_price))
+
+        final_value = portfolio_value[-1]
+        print(f"Final portfolio value: {final_value} (Initial: {initial_cash})")
+        return portfolio_value
+    
     def set_random_seed(self):
         seed_value = 143  # You can change this seed value
         np.random.seed(seed_value)
