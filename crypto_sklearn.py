@@ -1,10 +1,12 @@
 import numpy as np
 import logging
-import requests
 import time
 import datetime
 import alpaca_trade_api as tradeapi
 from sklearn.svm import SVR
+from requests import Request, Session
+from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
+import json
 
 API_KEY = 'PKZYTDU16C4GW63TOV68'
 API_SECRET = 'si6tzwHML9ZS2BLd0IktHkC2K6KkaZdOAACn0JhR'
@@ -86,13 +88,18 @@ class MLTrader:
 
     def on_trading_iteration(self):
         try:
+            # Detailed logging before each operation
+            logger.info("Fetching current price from CoinMarketCap for ETH")
             current_price = self.get_current_price_from_coinmarketcap()
+            if current_price is None:
+                logger.warning("No current price found.")
+                return
+            
+            logger.info(f"Current {self.symbol} Price: {current_price}")
 
             if current_price is None:
                 logger.warning("No current price found.")
                 return
-
-            print("Current Price:", current_price)
 
             closing_prices = [float(candle['close']) for candle in self.get_coinmarketcap_candles(limit=30)]
 
@@ -108,26 +115,28 @@ class MLTrader:
                     logger.info("Predicted price is lower than Current Price. Selling.")
 
         except Exception as e:
-            logger.error(f"Error in trading iteration: {e}")
+            logger.error(f"Error in trading iteration for {self.symbol}: {e}", exc_info=True)
 
     def get_current_price_from_coinmarketcap(self):
-        url = f'https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest'
+        url = 'https://sandbox-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest'
         parameters = {
-            'symbol': self.symbol,  # Ensure your symbol is supported by CoinMarketCap
+            'symbol': self.symbol,  # Change this to self.symbol
             'convert': 'USD'
         }
         headers = {
             'Accepts': 'application/json',
-            'X-CMC_PRO_API_KEY': "bc376488-bdfa-41ca-9f19-309e9ef5d0fc",
+            'X-CMC_PRO_API_KEY': 'b54bcf4d-1bca-4e8e-9a24-22ff2c3d462c',
         }
-      
+    
+        session = Session()
+        session.headers.update(headers)
+
         try:
-            response = requests.get(url, headers=headers, params=parameters)
-            response.raise_for_status()  # Raise exception for HTTP errors
-            data = response.json()
-            price = data['data'][self.symbol]['quote']['USD']['price']
+            response = session.get(url, params=parameters)
+            data = json.loads(response.text)
+            price = data['data'][self.symbol]['quote']['USD']['price']  # Change this to self.symbol
             return price
-        except requests.RequestException as e:
+        except (ConnectionError, Timeout, TooManyRedirects) as e:
             logger.error(f"Error fetching data from CoinMarketCap: {str(e)}")
 
     def predict_buy_signal(self, current_price, previous_closing_prices):
@@ -183,10 +192,10 @@ class MLTrader:
         np.random.seed(seed_value)
 
 if __name__ == "__main__":
-    symbol = 'ETHUSD'
+    symbol = 'ETH'
     alpaca_api = tradeapi.REST(API_KEY, API_SECRET, base_url='https://paper-api.alpaca.markets', api_version='v2')
 
-    ml_trader = MLTrader(symbol='ETHUSD', api=alpaca_api)
+    ml_trader = MLTrader(symbol='BTC', api=alpaca_api)
 
     # Loop to run every 60 seconds
     while True:
